@@ -1,13 +1,16 @@
 // Wind tunnel setup: which way the air blows, how fast, whether the part
 // spins (a propeller), and how detailed.
+import { Label } from "@/components/ui/label";
 import { useMemo, useState } from "react";
 import { ArrowDownIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, MoveDownLeftIcon, MoveUpRightIcon } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
-import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { dirLabel, n } from "../lib/format";
 import type { GridQuality, Vec3, WindConfig } from "../lib/types";
 import { AxisPicker, NumberField, Segmented, Step, unit } from "./common";
 import { useScene } from "./scene-state";
+import { Accordion } from "@/components/ui/accordion";
 import { modelCentre } from "./presets";
 import type { StepsProps } from "./study-form";
 import type { ToneArrow } from "../viewer/viewer";
@@ -61,34 +64,30 @@ export function WindSteps({ config: c, set, model, step, setStep, estimate }: St
   const speed = kmh ? c.speed_m_s * 3.6 : c.speed_m_s;
 
   return (
-    <div className="flex flex-col gap-2">
-      <Step n={1} title="Which way does the air blow?" summary={preset?.label ?? `Toward ${dirLabel(c.wind_dir)}`} open={step === 1} onOpen={() => setStep(step === 1 ? 0 : 1)} done testId="step-wind-dir">
-        <div className="grid grid-cols-2 gap-1.5 min-[420px]:grid-cols-3" role="radiogroup" aria-label="Where the wind comes from">
-          {FROM.map((f) => {
-            const on = same(f.dir, unit(c.wind_dir));
-            return (
-              <button
-                key={f.label}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                onClick={() => set({ ...c, wind_dir: f.dir })}
-                className={cn(
-                  "flex h-10 items-center gap-2 rounded-md border px-2.5 text-left text-xs font-medium outline-none transition-colors hover:border-input focus-visible:ring-[3px] focus-visible:ring-ring/50 [&_svg]:size-4 [&_svg]:shrink-0",
-                  on ? "border-sky/60 bg-sky/10 text-sky-text" : "bg-sunken/60 text-soft",
-                )}
-              >
-                {f.icon}
-                {f.label}
-              </button>
-            );
-          })}
-        </div>
+    <Accordion type="single" collapsible value={String(step)} onValueChange={(v) => setStep(Number(v) || 0)} className="flex flex-col gap-2">
+      <Step n={1} title="Which way does the air blow?" summary={preset?.label ?? `Toward ${dirLabel(c.wind_dir)}`} done testId="step-wind-dir">
+        <ToggleGroup
+          type="single"
+          aria-label="Where the wind comes from"
+          className="grid h-auto w-full grid-cols-2 gap-1 min-[420px]:grid-cols-3"
+          value={preset?.label ?? ""}
+          onValueChange={(v) => {
+            const f = FROM.find((x) => x.label === v);
+            if (f) set({ ...c, wind_dir: f.dir });
+          }}
+        >
+          {FROM.map((f) => (
+            <ToggleGroupItem key={f.label} value={f.label} className="h-9 justify-start px-2.5 text-xs">
+              {f.icon}
+              {f.label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
         <span className="text-xs text-muted-foreground">Or the exact way the air moves:</span>
         <AxisPicker label="Air moves toward" value={c.wind_dir} onChange={(v) => set({ ...c, wind_dir: v })} />
       </Step>
 
-      <Step n={2} title="How fast?" summary={`${n(c.speed_m_s)} m/s (${n(c.speed_m_s * 3.6)} km/h)`} open={step === 2} onOpen={() => setStep(step === 2 ? 0 : 2)} done testId="step-wind-speed">
+      <Step n={2} title="How fast?" summary={`${n(c.speed_m_s)} m/s (${n(c.speed_m_s * 3.6)} km/h)`} done testId="step-wind-speed">
         <div className="flex flex-wrap items-center gap-3">
           <NumberField label="Wind speed" value={Number(speed.toFixed(2))} min={0} onChange={(v) => set({ ...c, speed_m_s: kmh ? v / 3.6 : v })} testId="wind-speed" />
           <Segmented
@@ -107,15 +106,15 @@ export function WindSteps({ config: c, set, model, step, setStep, estimate }: St
             { label: "Cruising", v: 15 },
             { label: "Racing", v: 30 },
           ].map((p) => (
-            <button key={p.label} type="button" className="rounded-full border bg-card px-2.5 py-1 text-xs text-soft hover:border-input hover:text-foreground" onClick={() => set({ ...c, speed_m_s: p.v })}>
-              {p.label} · {p.v} m/s
-            </button>
+            <Button key={p.label} variant="outline" size="xs" className="rounded-full" onClick={() => set({ ...c, speed_m_s: p.v })}>
+              {p.label} · <span className="num">{p.v} m/s</span>
+            </Button>
           ))}
         </div>
       </Step>
 
-      <Step n={3} title="Does it spin?" summary={c.spin && c.spin.rpm > 0 ? `${n(c.spin.rpm)} rpm about ${dirLabel(c.spin.axis)}` : "No"} open={step === 3} onOpen={() => setStep(step === 3 ? 0 : 3)} done testId="step-wind-spin">
-        <label className="flex items-center justify-between gap-3 text-sm">
+      <Step n={3} title="Does it spin?" summary={c.spin && c.spin.rpm > 0 ? `${n(c.spin.rpm)} rpm about ${dirLabel(c.spin.axis)}` : "No"} done testId="step-wind-spin">
+        <Label className="flex items-center justify-between gap-3 text-sm">
           <span>
             It spins, like a propeller
             <span className="block text-xs text-muted-foreground">Then SimLab also measures its push (thrust), twist and power.</span>
@@ -126,7 +125,7 @@ export function WindSteps({ config: c, set, model, step, setStep, estimate }: St
             aria-label="It spins"
             data-testid="wind-spin"
           />
-        </label>
+        </Label>
         {c.spin && (
           <>
             <NumberField label="Spin speed" value={c.spin.rpm} unit="rpm" min={0} step={500} onChange={(v) => set({ ...c, spin: { ...c.spin!, rpm: v } })} />
@@ -136,7 +135,7 @@ export function WindSteps({ config: c, set, model, step, setStep, estimate }: St
         )}
       </Step>
 
-      <Step n={4} title="How detailed?" summary={c.quality.type[0]!.toUpperCase() + c.quality.type.slice(1)} open={step === 4} onOpen={() => setStep(step === 4 ? 0 : 4)} done testId="step-wind-quality">
+      <Step n={4} title="How detailed?" summary={c.quality.type[0]!.toUpperCase() + c.quality.type.slice(1)} done testId="step-wind-quality">
         <Segmented
           label="Detail"
           value={c.quality.type === "custom" ? "normal" : c.quality.type}
@@ -150,6 +149,6 @@ export function WindSteps({ config: c, set, model, step, setStep, estimate }: St
         <p className="text-xs text-muted-foreground">More detail means smaller air cells: sharper flow pictures and forces, but slower, and more memory on the graphics chip.</p>
         {estimate}
       </Step>
-    </div>
+    </Accordion>
   );
 }

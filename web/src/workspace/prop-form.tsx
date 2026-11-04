@@ -1,12 +1,15 @@
 // Propeller test setup: which way it pushes and where its hub is (filled in
 // from what SimLab found), the speeds to sweep, and forward speeds.
+import { Label } from "@/components/ui/label";
 import { useState } from "react";
 import { PlusIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { dirLabel, n } from "../lib/format";
 import type { PropConfig, Vec3 } from "../lib/types";
 import { AxisPicker, NumberField, Step } from "./common";
 import { useScene } from "./scene-state";
+import { Accordion } from "@/components/ui/accordion";
 import type { StepsProps } from "./study-form";
 
 export function propProblems(c: PropConfig): string[] {
@@ -29,8 +32,8 @@ export function PropSteps({ config: c, set, model, step, setStep }: StepsProps<P
   });
   const speeds = c.airspeeds_m_s ?? [0];
   return (
-    <div className="flex flex-col gap-2">
-      <Step n={1} title="Which way does it push?" summary={`Toward ${dirLabel(c.axis)}${g ? " (found from the shape)" : ""}`} open={step === 1} onOpen={() => setStep(step === 1 ? 0 : 1)} done testId="step-prop-axis">
+    <Accordion type="single" collapsible value={String(step)} onValueChange={(v) => setStep(Number(v) || 0)} className="flex flex-col gap-2">
+      <Step n={1} title="Which way does it push?" summary={`Toward ${dirLabel(c.axis)}${g ? " (found from the shape)" : ""}`} done testId="step-prop-axis">
         {g && <p className="text-sm text-soft">SimLab found a {g.blades}-blade propeller {n(g.radius_mm * 2)} mm across and filled this in. Change it if it pushes the other way.</p>}
         <AxisPicker label="Thrust direction" value={c.axis} onChange={(v) => set({ ...c, axis: v })} />
         <span className="text-xs text-muted-foreground">Hub centre (mm)</span>
@@ -42,36 +45,38 @@ export function PropSteps({ config: c, set, model, step, setStep }: StepsProps<P
             </span>
           ))}
         </div>
-        <label className="flex flex-wrap items-center gap-2 text-sm">
+        <Label className="flex flex-wrap items-center gap-2 text-sm">
           Blades
           <NumberField label="Blades" value={c.blades ?? g?.blades ?? 2} min={1} max={8} step={1} width="w-16" onChange={(v) => set({ ...c, blades: Math.round(v) })} />
-        </label>
+        </Label>
       </Step>
 
-      <Step n={2} title="How fast does it spin?" summary={`${n(c.rpm_min)} to ${n(c.rpm_max)} rpm, ${c.rpm_steps ?? 12} steps`} open={step === 2} onOpen={() => setStep(step === 2 ? 0 : 2)} done testId="step-prop-rpm">
+      <Step n={2} title="How fast does it spin?" summary={`${n(c.rpm_min)} to ${n(c.rpm_max)} rpm, ${c.rpm_steps ?? 12} steps`} done testId="step-prop-rpm">
         <div className="flex flex-wrap items-center gap-2 text-sm">
           From
           <NumberField label="Lowest speed" value={c.rpm_min} min={0} step={1000} onChange={(v) => set({ ...c, rpm_min: v })} testId="rpm-min" />
           to
           <NumberField label="Top speed" value={c.rpm_max} min={0} step={1000} unit="rpm" onChange={(v) => set({ ...c, rpm_max: v })} testId="rpm-max" />
         </div>
-        <label className="flex flex-wrap items-center gap-2 text-sm">
+        <Label className="flex flex-wrap items-center gap-2 text-sm">
           In
           <NumberField label="Steps" value={c.rpm_steps ?? 12} min={2} max={60} step={1} width="w-16" onChange={(v) => set({ ...c, rpm_steps: Math.round(v) })} />
           steps
-        </label>
+        </Label>
         <p className="text-xs text-muted-foreground">A 5-inch prop on a racing quad tops out around 30,000 rpm; a 7-inch around 20,000.</p>
       </Step>
 
-      <Step n={3} title="Flying forward too?" summary={speeds.map((v) => (v === 0 ? "hover" : `${n(v)} m/s`)).join(", ")} open={step === 3} onOpen={() => setStep(step === 3 ? 0 : 3)} done testId="step-prop-speeds">
+      <Step n={3} title="Flying forward too?" summary={speeds.map((v) => (v === 0 ? "hover" : `${n(v)} m/s`)).join(", ")} done testId="step-prop-speeds">
         <p className="text-sm text-soft">0 m/s is hovering. Faster forward flight lowers the push at the same speed.</p>
         <ul className="flex flex-wrap gap-1.5">
           {speeds.map((v) => (
-            <li key={v} className="inline-flex items-center gap-1 rounded-full bg-foreground/[0.07] py-0.5 pl-2.5 pr-0.5 text-xs text-soft">
-              {v === 0 ? "Hover (0 m/s)" : `${n(v)} m/s`}
-              <button type="button" className="grid size-5 place-items-center rounded-full hover:bg-foreground/10" onClick={() => set({ ...c, airspeeds_m_s: speeds.filter((x) => x !== v) })} aria-label={`Remove ${v} m/s`}>
-                <XIcon className="size-3" />
-              </button>
+            <li key={v}>
+              <Badge className="pr-0.5">
+                <span className="num">{v === 0 ? "Hover (0 m/s)" : `${n(v)} m/s`}</span>
+                <Button variant="ghost" size="icon-xs" className="rounded-full" onClick={() => set({ ...c, airspeeds_m_s: speeds.filter((x) => x !== v) })} aria-label={`Remove ${v} m/s`}>
+                  <XIcon />
+                </Button>
+              </Badge>
             </li>
           ))}
         </ul>
@@ -83,6 +88,6 @@ export function PropSteps({ config: c, set, model, step, setStep }: StepsProps<P
           </Button>
         </div>
       </Step>
-    </div>
+    </Accordion>
   );
 }

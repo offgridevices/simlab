@@ -4,7 +4,8 @@
 // workspace owns the view and merges what the panel asked for.
 import { createContext, useContext, useEffect, useRef } from "react";
 import type { ColorScale } from "../lib/colormaps";
-import type { Slice, Vec3 } from "../lib/types";
+import type { RegionShape, Slice, Vec3 } from "../lib/types";
+import type { Tone } from "../lib/format";
 import type { ToneArrow, ToneMark, ViewerHandle } from "../viewer/viewer";
 
 export interface SceneState {
@@ -13,8 +14,14 @@ export interface SceneState {
   marks: ToneMark[];
   /** clicking a face calls this; undefined = faces are not clickable */
   onPick?: (id: number) => void;
+  /** the brush: clicking the part gives the 3D point (takes over from onPick) */
+  onPoint?: (p: Vec3) => void;
+  /** areas picked by shape, coloured where they cover the surface */
+  regions: { shape: RegionShape; tone: Tone; alpha?: number }[];
   hoverable: boolean;
   field: { values: Float32Array; scale: ColorScale } | null;
+  /** point at the part to read the shown field: its name and unit */
+  probe: { label: string; unit: string } | null;
   deform: { disp: Float32Array; k: number } | null;
   arrows: ToneArrow[];
   plate: { up: Vec3 } | null;
@@ -28,8 +35,10 @@ export interface SceneState {
 export const DEFAULT_SCENE: SceneState = {
   source: { kind: "model" },
   marks: [],
+  regions: [],
   hoverable: true,
   field: null,
+  probe: null,
   deform: null,
   arrows: [],
   plate: null,
@@ -68,15 +77,19 @@ export function useScene(s: Partial<SceneState>) {
   const owner = useRef(Symbol("scene")).current;
   const pick = useRef(s.onPick);
   pick.current = s.onPick;
+  const point = useRef(s.onPoint);
+  point.current = s.onPoint;
   const hasPick = !!s.onPick;
-  const { onPick: _p, ...rest } = s;
+  const hasPoint = !!s.onPoint;
+  const { onPick: _p, onPoint: _q, ...rest } = s;
   void _p;
+  void _q;
   // typed arrays by identity (they come from caches and memos), everything else by value
   const key = JSON.stringify(rest, (_k, v) => (v instanceof Float32Array || v instanceof Uint8Array ? `${v.constructor.name}:${v.length}:${identity(v)}` : v));
   useEffect(() => {
-    ctl.set(owner, { ...s, onPick: hasPick ? (id: number) => pick.current?.(id) : undefined });
+    ctl.set(owner, { ...s, onPick: hasPick ? (id: number) => pick.current?.(id) : undefined, onPoint: hasPoint ? (p: Vec3) => point.current?.(p) : undefined });
     // `key` stands for everything in `s`
-  }, [key, hasPick]);
+  }, [key, hasPick, hasPoint]);
   useEffect(() => () => ctl.set(owner, null), []);
 }
 

@@ -79,6 +79,8 @@ export interface RunBrief {
   created_at: string;
   finished_at?: string | null;
   headline?: string | null;
+  /** strength runs: the verdict in one word */
+  verdict?: "safe" | "marginal" | "breaks" | null;
 }
 export interface Project {
   id: string;
@@ -117,6 +119,8 @@ export interface PropGuess {
   axis: Vec3;
   center_mm: Vec3;
   radius_mm: number;
+  /** the hub, where a propeller is held */
+  hub_radius_mm?: number;
   blades: number;
 }
 export interface Model {
@@ -173,8 +177,22 @@ export interface SpinConfig {
   center_mm: Vec3;
 }
 
+/** an area picked by shape, for parts that are one smooth surface (docs/API.md "regions") */
+export type RegionShape =
+  | { type: "sphere"; center_mm: Vec3; radius_mm: number }
+  | { type: "cylinder"; axis: Vec3; center_mm: Vec3; radius_mm: number; half_length_mm?: number | null }
+  | { type: "box"; min_mm: Vec3; max_mm: Vec3 };
+export interface Region {
+  /** 1,000,000 and up; listed in support.patches or a load's patches like a patch id */
+  id: number;
+  label: string;
+  shape: RegionShape;
+}
+export const REGION_ID_BASE = 1_000_000;
+
 export interface StrengthConfig {
   kind: "strength";
+  regions?: Region[];
   material_id: string;
   print_up: Vec3;
   support: Support;
@@ -237,6 +255,13 @@ export interface FieldInfo {
   diverging?: boolean;
 }
 
+/** how close this kind of result came to known answers, in plain words */
+export interface Accuracy {
+  method: string;
+  checked_against: string;
+  typical_error: string;
+}
+
 export interface StrengthSummary {
   kind: "strength";
   headline: string;
@@ -257,6 +282,9 @@ export interface StrengthSummary {
   mesh_seconds: number;
   reactions_n?: Vec3 | null;
   warnings: string[];
+  accuracy?: Accuracy | null;
+  /** element size used, model mm */
+  element_mm?: number | null;
 }
 export interface WindSummary {
   kind: "wind";
@@ -278,6 +306,7 @@ export interface WindSummary {
   seconds: number;
   converged: boolean;
   warnings: string[];
+  accuracy?: Accuracy | null;
 }
 export interface PropPoint {
   rpm: number;
@@ -300,6 +329,7 @@ export interface PropSummary {
   geometry: { r_mm: number; chord_mm: number; pitch_deg: number }[];
   points: PropPoint[];
   warnings: string[];
+  accuracy?: Accuracy | null;
 }
 export type Summary = StrengthSummary | WindSummary | PropSummary;
 

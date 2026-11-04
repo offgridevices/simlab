@@ -9,8 +9,8 @@ let renderer: THREE.WebGLRenderer | null = null;
 /** parts bigger than this get an icon instead: their surface is a big download for a 48-pixel picture */
 const MAX_TRIANGLES = 400_000;
 
-export function thumbnail(api: Api, modelId: string, colors: { part: string; dark: boolean }): Promise<string | null> {
-  const key = `${modelId}:${colors.part}:${colors.dark}`;
+export function thumbnail(api: Api, modelId: string, colors: { part: string; sky: string; ground: string }): Promise<string | null> {
+  const key = `${modelId}:${colors.part}:${colors.sky}:${colors.ground}`;
   let p = cache.get(key);
   if (!p) {
     p = (queue = queue.then(() => draw(api, modelId, colors), () => draw(api, modelId, colors))) as Promise<string | null>;
@@ -20,7 +20,7 @@ export function thumbnail(api: Api, modelId: string, colors: { part: string; dar
   return p;
 }
 
-async function draw(api: Api, id: string, colors: { part: string; dark: boolean }): Promise<string | null> {
+async function draw(api: Api, id: string, colors: { part: string; sky: string; ground: string }): Promise<string | null> {
   const model = await api.model(id);
   if (model.status !== "ready" || (model.triangles ?? Infinity) > MAX_TRIANGLES) return null;
   const s = await api.surface(id);
@@ -29,17 +29,18 @@ async function draw(api: Api, id: string, colors: { part: string; dark: boolean 
   renderer.setSize(size, size, false);
   renderer.setPixelRatio(1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.setClearColor(0x000000, 0);
+  renderer.setClearColor(new THREE.Color(), 0);
   const scene = new THREE.Scene();
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.BufferAttribute(s.positions, 3));
   g.setAttribute("normal", new THREE.BufferAttribute(s.normals, 3));
   g.setIndex(new THREE.BufferAttribute(s.indices, 1));
   g.computeBoundingSphere();
-  const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color().setStyle(colors.part || "#b9b0a0", THREE.SRGBColorSpace), roughness: 0.6, side: THREE.DoubleSide });
+  const tint = (c: string) => (c ? new THREE.Color().setStyle(c, THREE.SRGBColorSpace) : new THREE.Color().setRGB(0.6, 0.6, 0.6));
+  const mat = new THREE.MeshStandardMaterial({ color: tint(colors.part), roughness: 0.6, side: THREE.DoubleSide });
   scene.add(new THREE.Mesh(g, mat));
-  scene.add(new THREE.HemisphereLight(colors.dark ? 0xf1ece0 : 0xffffff, colors.dark ? 0x2a241d : 0x8a8478, 1.4));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+  scene.add(new THREE.HemisphereLight(tint(colors.sky), tint(colors.ground), 1.4));
+  const sun = new THREE.DirectionalLight(tint(colors.sky), 1.6);
   const cam = new THREE.PerspectiveCamera(30, 1, 0.1, 1e5);
   cam.up.set(0, 0, 1);
   const { center, radius } = g.boundingSphere!;

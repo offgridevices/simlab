@@ -2,6 +2,7 @@
 // with the engine's estimate (memory and time) and the Run button. The test
 // is saved when it first needs an estimate or runs, and saved again on
 // every run, so a run always matches the setup shown.
+import { Label } from "@/components/ui/label";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { PlayIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -166,10 +167,10 @@ export function StudyForm({
       }
     >
       {tabs}
-      <label className="flex flex-col gap-1.5 text-sm font-medium">
+      <Label className="flex flex-col items-stretch gap-1.5 text-sm font-medium">
         Name
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={initialName} data-testid="study-name" />
-      </label>
+      </Label>
       {config.kind === "strength" ? (
         <StrengthSteps {...props} config={config} set={setConfig} />
       ) : config.kind === "wind" ? (

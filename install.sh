@@ -62,6 +62,7 @@ mkdir -p app/src-tauri/binaries
 cp target/release/simlab-engine app/src-tauri/binaries/simlab-engine-aarch64-apple-darwin
 
 say "Building SimLab.app"
+cp web/src/styles/tokens.css app/splash/tokens.css   # one source of design truth
 ( cd app && pnpm install --frozen-lockfile --silent \
   && pnpm tauri icon src-tauri/icons/source.png -o src-tauri/icons >/dev/null \
   && pnpm tauri build --bundles app >/dev/null )

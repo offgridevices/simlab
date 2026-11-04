@@ -8,6 +8,7 @@ import { AppProvider } from "./lib/app";
 import App from "./App";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Loader } from "@/components/ui/skeleton";
+import { Toaster } from "@/components/ui/sonner";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -20,6 +21,7 @@ createRoot(document.getElementById("root")!).render(
     >
       <TooltipProvider>
         <App />
+        <Toaster position="bottom-center" />
       </TooltipProvider>
     </AppProvider>
   </StrictMode>,

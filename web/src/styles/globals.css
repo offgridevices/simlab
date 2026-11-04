@@ -1,133 +1,41 @@
-/* SimLab's look, copied from HardHub ("Workbench"): the OffGrid palette,
-   warm and colourful, on shadcn/ui components. Dark is the default; a device that
-   prefers light gets light; <html data-theme="light|dark"> always wins.
-   Components use the semantic tokens; the named colours (ember, moss, sky,
-   gold, plum, clay) carry status: moss safe, gold marginal, clay breaks,
-   sky air and flow. */
+/* Tailwind and the base styles. Every value comes from tokens.css; this file
+   only maps the tokens into Tailwind's theme, so classes like bg-card,
+   text-moss-text, rounded-lg, text-2xs and shadow-overlay follow them. */
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "./tokens.css";
 
-:root {
-  --radius: 0.625rem;
-
-  --background: #14110d;
-  --foreground: #f1ece0;
-  --card: #1d1915;
-  --card-foreground: #f1ece0;
-  --popover: #1d1915;
-  --popover-foreground: #f1ece0;
-  --primary: #ff6a00;
-  --primary-foreground: #1b1813;
-  --secondary: #2a241d;
-  --secondary-foreground: #f1ece0;
-  --muted: #2a241d;
-  --muted-foreground: #a89e8e;
-  --accent: #2a241d;
-  --accent-foreground: #f1ece0;
-  --destructive: #f07a5a;
-  --border: rgba(241, 236, 224, 0.09);
-  --input: rgba(241, 236, 224, 0.15);
-  --ring: #ff8a3d;
-  --sunken: #100d0a;
-  --soft: #cfc5b3;
-
-  /* named colours: a fill and the text that reads on its 14% tint */
-  --ember: #ff6a00;
-  --ember-text: #ff9a52;
-  --moss: #8cc084;
-  --moss-text: #a8d39f;
-  --sky: #6fa8e8;
-  --sky-text: #9cc4f0;
-  --gold: #f0b84a;
-  --gold-text: #f3c76e;
-  --plum: #c39bd3;
-  --plum-text: #d4b5e0;
-  --clay: #f07a5a;
-  --clay-text: #f7a088;
-
-  /* the 3D viewer: a soft spotlight behind the part, and the part itself */
-  --viewer-a: #2a241d;
-  --viewer-b: #100d0a;
-  --part: #b9b0a0;
-
-  color-scheme: dark;
-}
-
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --background: #f7f4ec;
-    --foreground: #1b1813;
-    --card: #fffdf8;
-    --card-foreground: #1b1813;
-    --popover: #fffdf8;
-    --popover-foreground: #1b1813;
-    --primary: #ff6a00;
-    --primary-foreground: #1b1813;
-    --secondary: #efe9dc;
-    --secondary-foreground: #1b1813;
-    --muted: #efe9dc;
-    --muted-foreground: #6b6456;
-    --accent: #efe9dc;
-    --accent-foreground: #1b1813;
-    --destructive: #b3401f;
-    --border: #e6dfd0;
-    --input: #d9cfbc;
-    --ring: #b34a00;
-    --sunken: #efeae0;
-    --soft: #4d473d;
-    --ember-text: #a84300;
-    --moss-text: #3f6b37;
-    --sky-text: #2b5487;
-    --gold-text: #7a5410;
-    --plum-text: #66406f;
-    --clay-text: #a8381a;
-    --viewer-a: #fffdf8;
-    --viewer-b: #e9e3d6;
-    --part: #8f877a;
-    color-scheme: light;
+/* shadcn's dark: classes follow SimLab's theme switch, not only the device */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
   }
-}
-:root[data-theme="light"] {
-  --background: #f7f4ec;
-  --foreground: #1b1813;
-  --card: #fffdf8;
-  --card-foreground: #1b1813;
-  --popover: #fffdf8;
-  --popover-foreground: #1b1813;
-  --primary: #ff6a00;
-  --primary-foreground: #1b1813;
-  --secondary: #efe9dc;
-  --secondary-foreground: #1b1813;
-  --muted: #efe9dc;
-  --muted-foreground: #6b6456;
-  --accent: #efe9dc;
-  --accent-foreground: #1b1813;
-  --destructive: #b3401f;
-  --border: #e6dfd0;
-  --input: #d9cfbc;
-  --ring: #b34a00;
-  --sunken: #efeae0;
-  --soft: #4d473d;
-  --ember-text: #a84300;
-  --moss-text: #3f6b37;
-  --sky-text: #2b5487;
-  --gold-text: #7a5410;
-  --plum-text: #66406f;
-  --clay-text: #a8381a;
-  --viewer-a: #fffdf8;
-  --viewer-b: #e9e3d6;
-  --part: #8f877a;
-  color-scheme: light;
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
 }
 
 @theme inline {
-  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-sans: var(--font-sans-family);
+  --font-mono: var(--font-mono-family);
+  --text-2xs: var(--text-2xs-size);
+  --text-2xs--line-height: var(--text-2xs-leading);
+  --text-md: var(--text-md-size);
+  --text-md--line-height: var(--text-md-leading);
+  --spacing: var(--spacing-unit);
+  --radius-xs: var(--radius-hairline);
+  --radius-check: var(--radius-check);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
+  --shadow-overlay: var(--shadow-overlay);
+  --shadow-float: var(--shadow-float);
+  --ease-out: var(--ease-out);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -143,11 +51,14 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-sunken: var(--sunken);
   --color-soft: var(--soft);
+  --color-scrim: var(--scrim);
+  --color-on-color: var(--on-color);
   --color-ember: var(--ember);
   --color-ember-text: var(--ember-text);
   --color-moss: var(--moss);
@@ -161,6 +72,19 @@
   --color-clay: var(--clay);
   --color-clay-text: var(--clay-text);
   --color-viewer: var(--viewer-b);
+  --color-viewer-a: var(--viewer-a);
+  --color-hud: var(--hud);
+  --color-hud-foreground: var(--hud-foreground);
+  --color-hud-muted: var(--hud-muted);
+  --color-axis-x: var(--axis-x);
+  --color-axis-y: var(--axis-y);
+  --color-axis-z: var(--axis-z);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-grid: var(--chart-grid);
 }
 
 @layer base {
@@ -178,23 +102,38 @@
   }
   body {
     @apply bg-background text-foreground font-sans antialiased;
-    font-size: 14px;
-    line-height: 1.5;
+    font-size: var(--text-base-size);
+    line-height: var(--leading-body);
     overflow-x: hidden;
   }
   ::selection {
     background: var(--ember);
-    color: #1b1813;
+    color: var(--on-color);
   }
   button:not(:disabled),
   [role="button"]:not(:disabled) {
     cursor: pointer;
   }
+  /* number inputs without the spinner arrows (they crowd a narrow panel) */
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
 }
 
+/* numbers: monospaced, every digit the same width, so columns line up */
 @utility num {
   font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: tabular-nums slashed-zero;
+}
+
+/* the 3D view's backdrop: a soft neutral spotlight */
+@utility viewer-backdrop {
+  background: radial-gradient(ellipse at 50% 40%, var(--viewer-a) 0%, var(--viewer-b) 78%);
 }
 
 /* a thin bar that moves while something loads */
@@ -221,15 +160,5 @@
 .hh-pulse {
   transform-box: fill-box;
   transform-origin: center;
-  animation: hh-pulse 1.6s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
-}
-
-/* number inputs without the spinner arrows (they crowd a narrow panel) */
-input[type="number"]::-webkit-inner-spin-button,
-input[type="number"]::-webkit-outer-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-input[type="number"] {
-  -moz-appearance: textfield;
+  animation: hh-pulse var(--duration-pulse) var(--ease-out) infinite;
 }

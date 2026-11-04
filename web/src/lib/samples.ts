@@ -119,6 +119,8 @@ export interface PropOptions {
   stations?: number;
   around?: number;
   hubSegments?: number;
+  /** one face for the whole part, like a smooth scan or an organic STL */
+  onePiece?: boolean;
 }
 
 export function makePropeller(o: PropOptions = {}): SampleMesh {
@@ -190,7 +192,12 @@ export function makePropeller(o: PropOptions = {}): SampleMesh {
     for (let j = 0; j < NP; j++) b.t(last[j]!, tip, last[(j + 1) % NP]!, pid);
   }
 
-  const prop: PropGuess = { axis: [0, 0, 1], center_mm: [0, 0, 0], radius_mm: R, blades: B };
+  const prop: PropGuess = { axis: [0, 0, 1], center_mm: [0, 0, 0], radius_mm: R, hub_radius_mm: hubR, blades: B };
+  if (o.onePiece) {
+    b.infos = [{ kind: "other", label: "Whole surface" }];
+    b.tri = b.tri.map(() => 0);
+    b.vpatch = b.vpatch.map(() => 0);
+  }
   const inside = ([x, y, z]: Vec3) => {
     const rr = Math.hypot(x, y);
     if (rr < hubR && rr > bore && Math.abs(z) < hubH / 2) return true;

@@ -12,3 +12,4 @@ __pycache__/
 /app/src-tauri/binaries/
 /app/src-tauri/icons/*
 !/app/src-tauri/icons/source.png
+/app/splash/tokens.css

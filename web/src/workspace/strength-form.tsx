@@ -9,11 +9,17 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { cn } from "@/lib/utils";
 import { useApp } from "../lib/app";
 import { dirLabel, G, LOAD_NAME, loadLine, n } from "../lib/format";
-import type { Load, LoadType, MeshQuality, Motor, Patch, StrengthConfig, Vec3 } from "../lib/types";
-import { ChoiceRow } from "../components/choice";
-import { AxisPicker, FaceChips, facesCentre, NumberField, Segmented, Step, toggle, unit } from "./common";
+import type { Load, LoadType, MeshQuality, Motor, Patch, Region, StrengthConfig, Support, Vec3 } from "../lib/types";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { AxisPicker, facesCentre, NumberField, Segmented, Step, toggle, unit } from "./common";
+import { AreaPicker, type PickMode } from "./area-picker";
+import { isRegion, nextRegionId, regionCentre } from "../lib/regions";
 import { MaterialPicker } from "./material-picker";
 import { useScene } from "./scene-state";
+import { Accordion } from "@/components/ui/accordion";
 import { DEFAULT_MOTOR, modelCentre, motorLoad, motorTorque } from "./presets";
 import type { StepsProps } from "./study-form";
 import type { ToneArrow, ToneMark } from "../viewer/viewer";
@@ -35,7 +41,13 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
   const { materials, motors } = useApp();
   const patches = model.patches ?? [];
   const [bedPick, setBedPick] = useState(false);
-  const [editing, setEditing] = useState<number | null>(c.loads.length ? null : null);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [pickMode, setPickMode] = useState<PickMode>("faces");
+  const [brush, setBrush] = useState(() => roundBrush(model.size_mm ? Math.max(...model.size_mm) * 0.08 : 6));
+  const [activeArea, setActiveArea] = useState<number | null>(null);
+  const regions = c.regions ?? [];
+  const pg = model.suggestions?.prop;
+  const hub = pg ? { center: pg.center_mm, axis: pg.axis, radius: pg.hub_radius_mm ?? pg.radius_mm * 0.11 } : null;
   const mat = materials?.find((m) => m.id === c.material_id);
   const mounts = model.suggestions?.motor_mounts ?? [];
   const R = model.size_mm ? Math.max(...model.size_mm) / 2 : 50;
@@ -43,6 +55,21 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
   const target: Target = step === 2 && bedPick ? { kind: "bed" } : step === 3 && c.support.type === "fixed" ? { kind: "support" } : step === 4 && editing !== null && c.loads[editing] && "patches" in c.loads[editing]! ? { kind: "load", i: editing } : null;
 
   const setLoad = (i: number, l: Load) => set({ ...c, loads: c.loads.map((x, j) => (j === i ? l : x)) });
+  /** new ids for the support or a load, with the config's regions; areas nothing uses any more are dropped */
+  const setArea = (where: "support" | number, ids: number[], next: Region[]) => {
+    const support: Support = where === "support" ? { type: "fixed", patches: ids } : c.support;
+    const loads = typeof where === "number" ? c.loads.map((l, j) => (j === where && "patches" in l ? ({ ...l, patches: ids } as Load) : l)) : c.loads;
+    const used = new Set([...(support.type === "fixed" ? support.patches : []), ...loads.flatMap((l) => ("patches" in l ? l.patches : []))]);
+    set({ ...c, support, loads, regions: next.filter((r) => used.has(r.id)) });
+  };
+  const brushAt = (p: Vec3) => {
+    if (!target || target.kind === "bed") return;
+    const id = nextRegionId(regions);
+    const r: Region = { id, label: "", shape: { type: "sphere", center_mm: p.map((v) => Number(v.toFixed(3))) as Vec3, radius_mm: brush / 2 } };
+    const ids = target.kind === "support" ? (c.support.type === "fixed" ? c.support.patches : []) : (c.loads[target.i] as { patches: number[] }).patches;
+    setArea(target.kind === "support" ? "support" : target.i, [...ids, id], [...regions, r]);
+    setActiveArea(id);
+  };
   const pick = (id: number) => {
     if (!target) return;
     if (target.kind === "bed") {
@@ -62,17 +89,24 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
   c.loads.forEach((l, i) => {
     if ("patches" in l) marks.push({ ids: l.patches, tone: "ember", alpha: target?.kind === "load" && target.i === i ? 0.95 : 0.55 });
   });
-  const arrows = useMemo(() => loadArrows(c.loads, patches, model, R), [c.loads, patches, model, R]);
+  const arrows = useMemo(() => loadArrows(c.loads, patches, regions, model, R), [c.loads, patches, regions, model, R]);
+  const heldIds = new Set(c.support.type === "fixed" ? c.support.patches : []);
+  const sceneRegions = regions.map((r) => ({ shape: r.shape, tone: heldIds.has(r.id) ? ("sky" as const) : ("ember" as const), alpha: r.id === activeArea ? 0.8 : 0.55 }));
+  const brushing = pickMode === "brush" && (target?.kind === "support" || target?.kind === "load");
   const spin = c.loads.find((l): l is Extract<Load, { type: "spin" | "prop_aero" }> => l.type === "spin" || l.type === "prop_aero");
   useScene({
     source: { kind: "model", modelId: model.id },
     marks,
-    onPick: target ? pick : undefined,
+    onPick: target && !brushing ? pick : undefined,
+    onPoint: brushing ? brushAt : undefined,
+    regions: sceneRegions,
     arrows,
     plate: step === 2 ? { up: c.print_up } : null,
     spin: spin ? { center: spin.center_mm, axis: spin.axis, radius: model.suggestions?.prop?.radius_mm ?? R * 0.9 } : null,
     hint:
-      target?.kind === "bed"
+      brushing
+        ? "Click the part to cover the area around that point"
+        : target?.kind === "bed"
         ? "Click the face that sits on the printer's bed"
         : target?.kind === "support"
           ? "Click faces to hold them still · click again to let go"
@@ -107,15 +141,15 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
 
   const fdm = mat?.process === "fdm";
   return (
-    <div className="flex flex-col gap-2">
-      <Step n={1} title="What is it made of?" summary={mat ? mat.name : "Not picked"} open={step === 1} onOpen={() => setStep(step === 1 ? 0 : 1)} done={!!mat} testId="step-material">
+    <Accordion type="single" collapsible value={String(step)} onValueChange={(v) => setStep(Number(v) || 0)} className="flex flex-col gap-2">
+      <Step n={1} title="What is it made of?" summary={mat ? mat.name : "Not picked"} done={!!mat} testId="step-material">
         <MaterialPicker materials={materials} value={c.material_id} onChange={(id) => set({ ...c, material_id: id })} />
         <Button size="sm" variant="outline" className="self-end" onClick={() => setStep(2)}>
           Next
         </Button>
       </Step>
 
-      <Step n={2} title="Which way is up on the printer?" summary={`Layers stack along ${dirLabel(c.print_up)}`} open={step === 2} onOpen={() => setStep(step === 2 ? 0 : 2)} done testId="step-print">
+      <Step n={2} title="Which way is up on the printer?" summary={`Layers stack along ${dirLabel(c.print_up)}`} done testId="step-print">
         <p className="text-sm text-soft">
           {fdm || !mat
             ? "Printed parts are weakest between their layers. Tell SimLab how it sat on the bed, so it knows which way the layers run."
@@ -133,34 +167,47 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
         n={3}
         title="How is it held?"
         summary={c.support.type === "free_flying" ? "Flying: nothing holds it" : `${c.support.patches.length} ${c.support.patches.length === 1 ? "face" : "faces"} held still`}
-        open={step === 3}
-        onOpen={() => setStep(step === 3 ? 0 : 3)}
         done={c.support.type === "free_flying" || c.support.patches.length > 0}
         testId="step-support"
       >
-        <div className="flex flex-col gap-2" role="radiogroup" aria-label="How it is held">
-          <ChoiceRow
-            checked={c.support.type === "fixed"}
-            onClick={() => set({ ...c, support: c.support.type === "fixed" ? c.support : { type: "fixed", patches: [] } })}
-            title="Held still at some faces"
-            detail="Bolted, clamped or glued there. Click those faces in the 3D view."
-            data-testid="support-fixed"
-          />
-          <ChoiceRow
-            checked={c.support.type === "free_flying"}
-            onClick={() => set({ ...c, support: { type: "free_flying" } })}
-            title="It's flying: nothing holds it"
-            detail="The loads speed it up instead, like a frame in the air. Best for frames."
-            data-testid="support-free"
-          />
-        </div>
+        <RadioGroup
+          aria-label="How it is held"
+          className="gap-2"
+          value={c.support.type}
+          onValueChange={(v) => set({ ...c, support: v === "fixed" ? (c.support.type === "fixed" ? c.support : { type: "fixed", patches: [] }) : { type: "free_flying" } })}
+        >
+          {[
+            { id: "fixed", title: "Held still at some faces", detail: "Bolted, clamped or glued there. Click those faces in the 3D view.", testId: "support-fixed" },
+            { id: "free_flying", title: "It's flying: nothing holds it", detail: "The loads speed it up instead, like a frame in the air. Best for frames.", testId: "support-free" },
+          ].map((o) => (
+            <Label
+              key={o.id}
+              htmlFor={`support-${o.id}`}
+              className="flex cursor-pointer items-start gap-3 rounded-lg border bg-card px-3.5 py-3 font-normal leading-normal has-[[data-state=checked]]:border-ember/60 has-[[data-state=checked]]:bg-ember/[0.06]"
+              data-testid={o.testId}
+            >
+              <RadioGroupItem id={`support-${o.id}`} value={o.id} className="mt-0.5" />
+              <span className="flex flex-col gap-0.5">
+                <span className="font-medium">{o.title}</span>
+                <span className="text-sm text-muted-foreground">{o.detail}</span>
+              </span>
+            </Label>
+          ))}
+        </RadioGroup>
         {c.support.type === "fixed" && (
-          <FaceChips
+          <AreaPicker
             ids={c.support.patches}
+            regions={regions}
+            onChange={(ids, next) => setArea("support", ids, next)}
             patches={patches}
             prepared={prepared}
-            onRemove={(id) => c.support.type === "fixed" && set({ ...c, support: { type: "fixed", patches: c.support.patches.filter((x) => x !== id) } })}
-            empty="No faces yet. Click the faces that are bolted or clamped."
+            mode={pickMode}
+            onMode={setPickMode}
+            brush={brush}
+            onBrush={setBrush}
+            active={activeArea}
+            hub={hub}
+            empty="Nothing held yet. Click the faces that are bolted or clamped, or brush the area."
           />
         )}
       </Step>
@@ -169,8 +216,6 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
         n={4}
         title="What pushes on it?"
         summary={c.loads.length ? c.loads.map((l) => LOAD_NAME[l.type]).join(", ") : "No loads yet"}
-        open={step === 4}
-        onOpen={() => setStep(step === 4 ? 0 : 4)}
         done={c.loads.length > 0}
         testId="step-loads"
       >
@@ -195,6 +240,7 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
               }}
               patches={patches}
               prepared={prepared}
+              area={{ regions, onChange: (ids, next) => setArea(i, ids, next), mode: pickMode, onMode: setPickMode, brush, onBrush: setBrush, active: activeArea }}
               motors={motors}
               mounts={mounts}
               propCentre={model.suggestions?.prop?.center_mm ?? null}
@@ -219,7 +265,7 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
         </DropdownMenu>
       </Step>
 
-      <Step n={5} title="How detailed?" summary={QUALITY_LABEL[c.quality.type]} open={step === 5} onOpen={() => setStep(step === 5 ? 0 : 5)} done testId="step-quality">
+      <Step n={5} title="How detailed?" summary={QUALITY_LABEL[c.quality.type]} done testId="step-quality">
         <Segmented
           label="Detail"
           value={c.quality.type === "custom" ? "normal" : c.quality.type}
@@ -234,7 +280,7 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
         <p className="text-xs text-muted-foreground">{QUALITY_HELP[c.quality.type]}</p>
         {estimate}
       </Step>
-    </div>
+    </Accordion>
   );
 }
 
@@ -264,6 +310,7 @@ function LoadCard({
   onRemove,
   patches,
   prepared,
+  area,
   motors,
   mounts,
   propCentre,
@@ -276,6 +323,7 @@ function LoadCard({
   onRemove(): void;
   patches: Patch[];
   prepared: StepsProps<StrengthConfig>["prepared"];
+  area: { regions: Region[]; onChange(ids: number[], regions: Region[]): void; mode: PickMode; onMode(m: PickMode): void; brush: number; onBrush(d: number): void; active: number | null };
   motors: Motor[] | null;
   mounts: NonNullable<NonNullable<import("../lib/types").Model["suggestions"]>["motor_mounts"]>;
   propCentre: Vec3 | null;
@@ -283,21 +331,22 @@ function LoadCard({
   const needsFaces = "patches" in l;
   const missing = needsFaces && !l.patches.length;
   return (
-    <li className={cn("rounded-lg border", open ? "border-ember/50 bg-ember/[0.03]" : "bg-sunken/40")} data-testid="load-card">
+    <li data-testid="load-card">
+      <Collapsible open={open} onOpenChange={onOpen} className={cn("rounded-lg border", open ? "border-ember/50 bg-ember/[0.03]" : "bg-sunken/40")}>
       <div className="flex items-center gap-2 px-3 py-2">
-        <button type="button" className="flex min-w-0 flex-1 flex-col text-left outline-none focus-visible:underline" onClick={onOpen} aria-expanded={open}>
+        <CollapsibleTrigger className="flex min-w-0 flex-1 flex-col rounded-sm text-left outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
           <span className="flex items-center gap-2 text-sm font-medium">
             <span className="num text-xs text-muted-foreground">{i + 1}</span>
             {l.label || LOAD_NAME[l.type]}
             {missing && <Badge tone="gold">Pick faces</Badge>}
           </span>
           <span className="truncate text-xs text-muted-foreground">{loadLine(l)}</span>
-        </button>
+        </CollapsibleTrigger>
         <Button variant="ghost" size="icon-sm" onClick={onRemove} aria-label={`Remove load ${i + 1}`}>
           <Trash2Icon />
         </Button>
       </div>
-      {open && (
+      <CollapsibleContent>
         <div className="flex flex-col gap-3 border-t px-3 py-3">
           {l.type === "motor" && <MotorFields load={l} onChange={onChange} motors={motors} mounts={mounts} />}
           {l.type === "force" && (
@@ -370,11 +419,24 @@ function LoadCard({
           )}
           {needsFaces && (
             <Field label="Pushes on these faces">
-              <FaceChips ids={l.patches} patches={patches} prepared={prepared} onRemove={(id) => onChange({ ...l, patches: l.patches.filter((x) => x !== id) } as Load)} empty="Click faces in the 3D view." />
+              <AreaPicker
+                ids={l.patches}
+                regions={area.regions}
+                onChange={area.onChange}
+                patches={patches}
+                prepared={prepared}
+                mode={area.mode}
+                onMode={area.onMode}
+                brush={area.brush}
+                onBrush={area.onBrush}
+                active={area.active}
+                empty="Nothing yet. Click faces in the 3D view, or brush the area."
+              />
             </Field>
           )}
         </div>
-      )}
+      </CollapsibleContent>
+      </Collapsible>
     </li>
   );
 }
@@ -393,23 +455,25 @@ function MotorFields({ load: l, onChange, motors, mounts }: { load: Extract<Load
   return (
     <>
       <Field label="Motor">
-        <select
-          className="h-9 w-full rounded-md border border-input bg-sunken/60 px-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
-          value={match?.id ?? ""}
-          onChange={(e) => {
-            const m = motors?.find((x) => x.id === e.target.value);
+        <Select
+          value={match?.id ?? "own"}
+          onValueChange={(v) => {
+            const m = motors?.find((x) => x.id === v);
             if (m) onChange({ ...l, thrust_n: (m.max_thrust_g / 1000) * G, torque_nm: motorTorque(m), motor_mass_g: m.mass_g });
           }}
-          aria-label="Motor"
-          data-testid="motor-preset"
         >
-          <option value="">My own numbers</option>
-          {motors?.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name} · {n(m.max_thrust_g)} g
-            </option>
-          ))}
-        </select>
+          <SelectTrigger aria-label="Motor" data-testid="motor-preset">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="own">My own numbers</SelectItem>
+            {motors?.map((m) => (
+              <SelectItem key={m.id} value={m.id}>
+                {m.name} · <span className="num">{n(m.max_thrust_g)} g</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </Field>
       <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2">
         <Field label="Thrust, full throttle">
@@ -442,6 +506,20 @@ function MotorFields({ load: l, onChange, motors, mounts }: { load: Extract<Load
 
 const scale = (v: Vec3, k: number): Vec3 => [v[0] * k, v[1] * k, v[2] * k];
 
+/** a brush size that reads well: 0.5 mm steps */
+const roundBrush = (d: number) => Math.max(0.5, Math.round(d * 2) / 2);
+
+/** the middle of some faces and areas */
+function areaCentre(ids: number[], patches: Patch[], regions: Region[]): Vec3 | null {
+  const faces = facesCentre(ids.filter((i) => !isRegion(i)), patches);
+  const pts = [...(faces ? [faces] : []), ...ids.filter(isRegion).flatMap((i) => {
+    const r = regions.find((x) => x.id === i);
+    return r ? [regionCentre(r.shape)] : [];
+  })];
+  if (!pts.length) return null;
+  return [0, 1, 2].map((k) => pts.reduce((s, p) => s + p[k]!, 0) / pts.length) as Vec3;
+}
+
 /** a face's outward direction: from the engine when it is flat, else averaged from the surface */
 export function faceNormal(id: number, patches: Patch[], prepared: StepsProps<StrengthConfig>["prepared"]): Vec3 | null {
   const p = patches.find((x) => x.id === id);
@@ -458,11 +536,11 @@ export function faceNormal(id: number, patches: Patch[], prepared: StepsProps<St
   return Math.hypot(...s) > 0 ? unit(s) : null;
 }
 
-function loadArrows(loads: Load[], patches: Patch[], model: import("../lib/types").Model, R: number): ToneArrow[] {
+function loadArrows(loads: Load[], patches: Patch[], regions: Region[], model: import("../lib/types").Model, R: number): ToneArrow[] {
   const out: ToneArrow[] = [];
   for (const l of loads) {
     if (l.type === "motor" || l.type === "force" || l.type === "pressure") {
-      const c = facesCentre(l.patches, patches);
+      const c = areaCentre(l.patches, patches, regions);
       if (!c) continue;
       const dir: Vec3 | null = l.type === "motor" ? l.axis : l.type === "force" ? l.force_n : (() => {
         const p = patches.find((x) => x.id === l.patches[0]);

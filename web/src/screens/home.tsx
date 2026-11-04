@@ -1,12 +1,15 @@
 // Projects: drop a part to start, or try an example; below, every project
 // with its last result.
+import { Input } from "@/components/ui/input";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { BoxIcon, FlaskConicalIcon, Trash2Icon, UploadIcon } from "lucide-react";
 import { Screen, TopBar } from "../components/topbar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Loader } from "@/components/ui/skeleton";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Card } from "@/components/ui/card";
+import { toast } from "sonner";
+import { Confirm } from "../components/confirm";
 import { cn } from "@/lib/utils";
 import { useApp, useEvents } from "../lib/app";
 import { href, navigate } from "../lib/router";
@@ -34,8 +37,6 @@ export default function Home() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [over, setOver] = useState(false);
-  const [asking, setAsking] = useState<string | null>(null);
-  const [deleting, setDeleting] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
 
   const load = () => api.projects().then(setList, (e: Error) => setError(e.message));
@@ -83,15 +84,12 @@ export default function Home() {
   };
 
   const remove = async (p: ProjectSummary) => {
-    setDeleting(p.id);
     try {
       await api.deleteProject(p.id);
       setList((l) => l?.filter((x) => x.id !== p.id) ?? null);
-      setAsking(null);
+      toast.success(`Deleted “${p.name}”`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not delete the project");
-    } finally {
-      setDeleting(null);
+      toast.error(err instanceof Error ? err.message : "Could not delete the project");
     }
   };
 
@@ -143,22 +141,15 @@ export default function Home() {
                 </span>
               </>
             )}
-            <input ref={input} type="file" accept={ACCEPT} className="hidden" onChange={(e) => onFiles(e.target.files)} data-testid="file-input" />
+            <Input ref={input} type="file" accept={ACCEPT} className="hidden" onChange={(e) => onFiles(e.target.files)} data-testid="file-input" />
           </div>
           <div className="flex flex-wrap items-center gap-2" aria-label="Examples">
             <span className="text-sm text-muted-foreground">No file handy? Try</span>
             {EXAMPLES.map((x) => (
-              <button
-                key={x.id}
-                type="button"
-                disabled={!!busy}
-                onClick={() => tryExample(x.id)}
-                className="inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-sm text-soft transition-colors outline-none hover:border-input hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-                data-testid={`example-${x.id}`}
-              >
+              <Button key={x.id} variant="outline" size="sm" className="rounded-full font-normal text-soft" disabled={!!busy} onClick={() => tryExample(x.id)} data-testid={`example-${x.id}`}>
                 <span className={cn("size-2 shrink-0 rounded-full", x.dot)} />
                 {x.label}
-              </button>
+              </Button>
             ))}
           </div>
           {error && (
@@ -178,11 +169,11 @@ export default function Home() {
           ) : list.length === 0 ? (
             <p className="py-4 text-sm text-muted-foreground">Nothing yet. Your first part will show up here.</p>
           ) : (
-            <ul className="overflow-hidden rounded-xl border bg-card" data-testid="project-list">
+            <Card className="gap-0 overflow-hidden py-0" data-testid="project-list" role="list">
               {list.map((p) => {
                 const pill = pillFor(p.last_run);
                 return (
-                  <li key={p.id} className="flex items-center gap-2 border-b pr-2 last:border-b-0 hover:bg-foreground/[0.03]" data-testid="project-row">
+                  <div key={p.id} role="listitem" className="flex items-center gap-2 border-b pr-2 last:border-b-0 hover:bg-foreground/[0.03]" data-testid="project-row">
                     <a className="flex min-w-0 flex-1 items-center gap-3 py-3 pl-3 outline-none focus-visible:bg-accent sm:pl-4" href={href(`/p/${p.id}`)}>
                       <Thumb modelId={p.thumbnail_model_id ?? null} />
                       <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1">
@@ -198,30 +189,22 @@ export default function Home() {
                         </span>
                       </span>
                     </a>
-                    {asking === p.id ? (
-                      <span className="flex items-center gap-2" role="group" aria-label={`Delete ${p.name}?`}>
-                        <span className="hidden text-sm sm:inline">Delete it and its results?</span>
-                        <Button size="xs" variant="destructive" onClick={() => remove(p)} disabled={deleting === p.id} data-testid="delete-confirm">
-                          {deleting === p.id ? "Deleting…" : "Delete"}
+                    <Confirm
+                      trigger={
+                        <Button variant="ghost" size="icon-sm" aria-label={`Delete ${p.name}`} data-testid="delete-project">
+                          <Trash2Icon />
                         </Button>
-                        <Button size="xs" variant="outline" onClick={() => setAsking(null)} disabled={deleting === p.id}>
-                          Keep
-                        </Button>
-                      </span>
-                    ) : (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button variant="ghost" size="icon-sm" onClick={() => setAsking(p.id)} aria-label={`Delete ${p.name}`} data-testid="delete-project">
-                            <Trash2Icon />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Delete</TooltipContent>
-                      </Tooltip>
-                    )}
-                  </li>
+                      }
+                      title={`Delete “${p.name}”?`}
+                      description="Its parts, tests and results go for good. The files on your Mac that you dropped in stay where they are."
+                      action="Delete"
+                      onConfirm={() => remove(p)}
+                      testId="delete-confirm"
+                    />
+                  </div>
                 );
               })}
-            </ul>
+            </Card>
           )}
         </section>
       </main>
@@ -240,14 +223,14 @@ function Thumb({ modelId }: { modelId: string | null }) {
     if (!modelId) return;
     let live = true;
     import("../viewer/thumb")
-      .then(({ thumbnail }) => thumbnail(api, modelId, { part: cssVar("--part"), dark: theme === "dark" }))
+      .then(({ thumbnail }) => thumbnail(api, modelId, { part: cssVar("--part"), sky: cssVar("--viewer-light-sky"), ground: cssVar("--viewer-light-ground") }))
       .then((u) => live && setUrl(u), () => live && setUrl(null));
     return () => {
       live = false;
     };
   }, [api, modelId, theme]);
   return (
-    <span className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-lg bg-[radial-gradient(ellipse_at_50%_40%,var(--viewer-a)_0%,var(--viewer-b)_90%)] text-muted-foreground">
+    <span className="grid size-12 shrink-0 place-items-center overflow-hidden rounded-lg viewer-backdrop text-muted-foreground">
       {url ? <img src={url} alt="" className="size-12 object-contain" /> : <BoxIcon className="size-5" />}
     </span>
   );

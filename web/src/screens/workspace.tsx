@@ -6,6 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { BoxIcon, CheckIcon, FlaskConicalIcon, PencilIcon, TableIcon } from "lucide-react";
 import { Screen, TopBar, Centre } from "../components/topbar";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Drawer, DrawerContent, DrawerDescription, DrawerTitle } from "@/components/ui/drawer";
 import { Loader } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -21,6 +23,20 @@ import { CompareView } from "../workspace/compare";
 import type { Model } from "../lib/types";
 
 export type View = "model" | "tests" | "compare";
+/** where the phone's panel sheet rests: a peek over the 3D view, or nearly full height */
+const SNAPS = [0.45, 0.94];
+
+function useMediaQuery(q: string): boolean {
+  const [on, setOn] = useState(() => typeof matchMedia !== "undefined" && matchMedia(q).matches);
+  useEffect(() => {
+    const m = matchMedia(q);
+    const f = () => setOn(m.matches);
+    m.addEventListener("change", f);
+    f();
+    return () => m.removeEventListener("change", f);
+  }, [q]);
+  return on;
+}
 const RAIL: { id: View; label: string; icon: ReactNode }[] = [
   { id: "model", label: "Model", icon: <BoxIcon /> },
   { id: "tests", label: "Tests", icon: <FlaskConicalIcon /> },
@@ -43,7 +59,6 @@ export interface Nav {
 export default function Workspace({ id, query }: { id: string; query: URLSearchParams }) {
   const { data, error, reload, setData } = useProject(id);
   const view = (["model", "tests", "compare"].includes(query.get("view") ?? "") ? query.get("view") : data && data.studies.length ? "tests" : "model") as View;
-  const [pane, setPane] = useState<"view" | "panel">("panel");
 
   const nav: Nav = useMemo(
     () => ({
@@ -90,26 +105,24 @@ export default function Workspace({ id, query }: { id: string; query: URLSearchP
         </Centre>
       </Screen>
     );
-  return <Loaded data={data} nav={nav} pane={pane} setPane={setPane} reload={reload} setData={setData} />;
+  return <Loaded data={data} nav={nav} reload={reload} setData={setData} />;
 }
 
 function Loaded({
   data,
   nav,
-  pane,
-  setPane,
   reload,
   setData,
 }: {
   data: ProjectData;
   nav: Nav;
-  pane: "view" | "panel";
-  setPane(p: "view" | "panel"): void;
   reload(): void;
   setData: React.Dispatch<React.SetStateAction<ProjectData | null>>;
 }) {
   const { api } = useApp();
   const viewer = useRef<ViewerHandle | null>(null);
+  const phone = useMediaQuery("(max-width: 699px)");
+  const [snap, setSnap] = useState<number | string | null>(SNAPS[0]!);
   const [overlay, setOverlay] = useState<HTMLDivElement | null>(null);
   const [requests, setRequests] = useState<Map<symbol, Partial<SceneState>>>(() => new Map());
   const [hovered, setHovered] = useState<number | null>(null);
@@ -189,16 +202,14 @@ function Loaded({
               return (
                 <Tooltip key={t.id}>
                   <TooltipTrigger asChild>
-                    <button
+                    <Button
+                      variant="ghost"
                       role="tab"
                       aria-selected={selected}
-                      onClick={() => {
-                        nav.go({ view: t.id });
-                        if (t.id !== "compare") setPane("panel");
-                      }}
+                      onClick={() => nav.go({ view: t.id })}
                       data-testid={`rail-${t.id}`}
                       className={cn(
-                        "relative flex h-11 shrink-0 items-center gap-2 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 min-[700px]:w-11 min-[700px]:justify-center min-[700px]:px-0 [&_svg]:size-5",
+                        "relative h-11 shrink-0 rounded-lg px-3 text-muted-foreground min-[700px]:w-11 min-[700px]:px-0 [&_svg:not([class*='size-'])]:size-5",
                         selected && "bg-ember/15 text-ember-text hover:bg-ember/20 hover:text-ember-text",
                       )}
                     >
@@ -208,7 +219,7 @@ function Loaded({
                         <span aria-hidden="true" className="absolute right-1 top-1 size-2.5 animate-spin rounded-full border-[1.5px] border-ember border-t-transparent [animation-duration:1.2s]" />
                       )}
                       {t.id === "tests" && running && <span className="sr-only"> (a test is running)</span>}
-                    </button>
+                    </Button>
                   </TooltipTrigger>
                   <TooltipContent side="right" className="max-[699px]:hidden">
                     {t.label}
@@ -225,7 +236,7 @@ function Loaded({
           ) : (
             <>
               <section
-                className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card", pane === "panel" && "max-[699px]:hidden")}
+                className={cn("relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border bg-card", phone && "mb-[calc(45dvh-3rem)]")}
                 aria-label="3D view"
               >
                 <Viewer
@@ -237,9 +248,13 @@ function Loaded({
                   pickable={!!scene.onPick}
                   hoverable={scene.hoverable}
                   onPick={scene.onPick}
+                  onPoint={scene.onPoint}
+                  regions={scene.regions}
                   onHover={onHover}
                   hoverId={hoverFromPanel}
                   field={scene.field}
+                  probe={scene.probe}
+                  size={model?.size_mm ?? null}
                   deform={scene.deform}
                   arrows={scene.arrows}
                   plate={scene.plate}
@@ -248,28 +263,29 @@ function Loaded({
                   critical={scene.critical}
                   hint={scene.hint ?? "Drag to turn · scroll or pinch to zoom"}
                 >
-                  <div ref={setOverlay} className="pointer-events-none absolute inset-x-3 top-14 flex justify-center @min-[560px]:top-auto @min-[560px]:bottom-3 @min-[560px]:left-24 @min-[560px]:right-36" />
+                  <div ref={setOverlay} className="pointer-events-none absolute inset-x-3 top-20 flex justify-center @min-[560px]:top-auto @min-[560px]:bottom-3 @min-[560px]:left-24 @min-[560px]:right-36" />
                 </Viewer>
               </section>
-              <aside
-                className={cn("flex min-h-0 flex-col overflow-hidden rounded-xl border bg-card max-[699px]:flex-1 min-[700px]:w-[320px] min-[700px]:shrink-0 lg:w-[360px] xl:w-[400px]", pane === "view" && "max-[699px]:hidden")}
-                aria-label={nav.view === "model" ? "Model" : "Tests"}
-              >
-                {panel}
-              </aside>
+              {phone ? (
+                // on a phone the panel is a sheet over the 3D view: drag it up to read, down to look
+                <Drawer open modal={false} dismissible={false} snapPoints={SNAPS} activeSnapPoint={snap} setActiveSnapPoint={setSnap}>
+                  <DrawerContent overlay={false} className="h-[94dvh] border-x data-[vaul-drawer-direction=bottom]:max-h-none data-[vaul-drawer-direction=bottom]:mt-0" data-testid="panel-sheet">
+                    <DrawerTitle className="sr-only">{nav.view === "model" ? "Model" : "Tests"}</DrawerTitle>
+                    <DrawerDescription className="sr-only">Drag up to read more, down to see the part</DrawerDescription>
+                    <div className="flex min-h-0 flex-1 flex-col" style={{ maxHeight: `calc(${(typeof snap === "number" ? snap : 0.45) * 100}dvh - 1.75rem)` }}>
+                      {panel}
+                    </div>
+                  </DrawerContent>
+                </Drawer>
+              ) : (
+                <aside className="flex min-h-0 w-[320px] shrink-0 flex-col overflow-hidden rounded-xl border bg-card lg:w-[360px] xl:w-[400px]" aria-label={nav.view === "model" ? "Model" : "Tests"}>
+                  {panel}
+                </aside>
+              )}
             </>
           )}
         </div>
-        {nav.view !== "compare" && (
-          <nav className="grid shrink-0 grid-cols-2 gap-1 border-t bg-card p-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] min-[700px]:hidden" aria-label="Show">
-            <Button variant={pane === "view" ? "secondary" : "ghost"} aria-pressed={pane === "view"} onClick={() => setPane("view")} data-testid="pane-view">
-              3D view
-            </Button>
-            <Button variant={pane === "panel" ? "secondary" : "ghost"} aria-pressed={pane === "panel"} onClick={() => setPane("panel")} data-testid="pane-panel">
-              {nav.view === "model" ? "Model" : "Tests"}
-            </Button>
-          </nav>
-        )}
+
       </div>
     </SceneContext.Provider>
   );
@@ -306,9 +322,9 @@ function ProjectName({ name, onSave }: { name: string; onSave(n: string): Promis
   if (editing)
     return (
       <span className="flex min-w-0 items-center gap-1">
-        <input
+        <Input
           autoFocus
-          className="h-8 min-w-0 max-w-72 flex-1 rounded-md border border-ring bg-sunken/60 px-2 text-sm font-medium outline-none ring-[3px] ring-ring/30"
+          className="h-8 min-w-0 max-w-72 flex-1 px-2 font-medium"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKey}
@@ -323,15 +339,9 @@ function ProjectName({ name, onSave }: { name: string; onSave(n: string): Promis
       </span>
     );
   return (
-    <button
-      type="button"
-      className="group flex min-w-0 items-center gap-1.5 rounded-md px-1 py-0.5 text-left font-medium outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
-      onClick={() => setEditing(true)}
-      title="Rename the project"
-      data-testid="project-name"
-    >
+    <Button variant="ghost" size="sm" className="group min-w-0 justify-start px-1.5 text-foreground" onClick={() => setEditing(true)} title="Rename the project" data-testid="project-name">
       <span className="truncate">{name}</span>
       <PencilIcon className="size-3.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true" />
-    </button>
+    </Button>
   );
 }

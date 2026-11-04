@@ -4,16 +4,18 @@
 import { useMemo, useState } from "react";
 import { ShieldCheckIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { n } from "../lib/format";
 import type { Model, PropSummary, Run } from "../lib/types";
 import { LineChart, type Series } from "../components/charts";
 import { Details, Stat } from "../components/section";
 import { useScene } from "./scene-state";
+import { HowSure } from "./common";
 import { presetSpin, type Preset } from "./presets";
 import { si } from "../lib/scales";
 
-const TONES = ["plum", "sky", "ember", "moss", "gold"] as const;
 
 export function PropResults({ run, summary: s, model, onStrength }: { run: Run; summary: PropSummary; model: Model | undefined; onStrength(p: Preset): void }) {
   const cfg = run.config.kind === "prop" ? run.config : null;
@@ -29,7 +31,7 @@ export function PropResults({ run, summary: s, model, onStrength }: { run: Run; 
       .map((v) => {
         const i = speeds.indexOf(v);
         const pts = s.points.filter((p) => p.airspeed_m_s === v && y(p) !== null && y(p) !== undefined);
-        return { name: v === 0 ? "Hover" : `${n(v)} m/s`, xs: pts.map((p) => p.rpm), ys: pts.map((p) => y(p)!), tone: TONES[i % TONES.length] };
+        return { name: v === 0 ? "Hover" : `${n(v)} m/s`, xs: pts.map((p) => p.rpm), ys: pts.map((p) => y(p)!), color: (i % 5) + 1 };
       });
   const hover = s.points.filter((p) => p.airspeed_m_s === 0);
   const top = (hover.length ? hover : s.points).at(-1);
@@ -39,10 +41,13 @@ export function PropResults({ run, summary: s, model, onStrength }: { run: Run; 
 
   return (
     <div className="flex flex-col gap-4" data-testid="prop-results">
-      <div className="flex flex-col gap-1 rounded-xl border border-plum/40 bg-plum/10 p-4">
-        <span className="text-xl font-semibold tracking-tight text-plum-text">Push and power</span>
+      <Card className="gap-1 border-plum/40 bg-plum/10 p-4">
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-xl font-semibold tracking-tight text-plum-text">Push and power</span>
+          {top && <span className="num text-xl font-semibold text-plum-text">{n(top.thrust_g)} g</span>}
+        </div>
         <span className="text-soft">{s.headline}</span>
-      </div>
+      </Card>
       {top && (
         <div className="grid grid-cols-2 gap-2">
           <Stat label={`Push at ${si(top.rpm)}rpm`} value={n(top.thrust_g)} unit="g" />
@@ -51,6 +56,7 @@ export function PropResults({ run, summary: s, model, onStrength }: { run: Run; 
           <Stat label="Blades · across" value={`${s.blades} · ${n(s.radius_mm * 2)}`} unit="mm" />
         </div>
       )}
+      <HowSure accuracy={s.accuracy} facts={[`${s.points.length} working points`, `${s.blades} blades`, `${s.geometry.length} blade sections read`]} />
       <LineChart series={series((p) => p.thrust_g)} height={170} fmtX={(v) => si(v)} fmtY={(v) => `${n(v)} g`} label="Push in grams against speed in rpm" yLabel="Push (g)" xLabel="rpm" />
       <LineChart series={series((p) => p.power_w)} height={150} fmtX={(v) => si(v)} fmtY={(v) => `${n(v)} W`} label="Power in watts against speed in rpm" yLabel="Power (W)" xLabel="rpm" />
       {forward ? (
@@ -75,29 +81,26 @@ export function PropResults({ run, summary: s, model, onStrength }: { run: Run; 
         />
       )}
 
-      <div className="flex flex-col gap-2 rounded-xl border p-3">
+      <Card className="gap-2 p-3">
         <span className="text-sm font-medium">Will the blades hold at this speed?</span>
-        <label className="flex items-center gap-2 text-sm">
-          <select
-            className="h-9 rounded-md border border-input bg-sunken/60 px-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
-            value={rpm}
-            onChange={(e) => setRpm(Number(e.target.value))}
-            aria-label="Speed to test"
-            data-testid="strength-rpm"
-          >
+        <Select value={String(rpm)} onValueChange={(v) => setRpm(Number(v))}>
+          <SelectTrigger className="w-auto" aria-label="Speed to test" data-testid="strength-rpm">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
             {rpms.map((r) => (
-              <option key={r} value={r}>
-                {Math.round(r).toLocaleString("en-US")} rpm
-              </option>
+              <SelectItem key={r} value={String(r)}>
+                <span className="num">{Math.round(r).toLocaleString("en-US")} rpm</span>
+              </SelectItem>
             ))}
-          </select>
-        </label>
+          </SelectContent>
+        </Select>
         <Button onClick={() => model && onStrength(presetSpin(model, rpm, speeds[0] ?? 0))} disabled={!model} data-testid="test-strength-at-rpm">
           <ShieldCheckIcon />
           Test strength at this speed
         </Button>
         <span className="text-xs text-muted-foreground">Sets up a strength test with the spin and the air pushing on the blades, held at the hub.</span>
-      </div>
+      </Card>
 
       <Details summary="Blade shape, as SimLab read it">
         <Table>

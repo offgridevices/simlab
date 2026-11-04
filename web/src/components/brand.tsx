@@ -17,7 +17,7 @@ export const Mark = memo(function Mark({ size = 22, className }: { size?: number
 export const Lockup = memo(function Lockup({ href = "#/", by = true, className }: { href?: string; by?: boolean; className?: string }) {
   return (
     <a
-      className={cn("inline-flex items-center gap-2.5 whitespace-nowrap rounded-md text-[15px] font-semibold tracking-tight no-underline outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", className)}
+      className={cn("inline-flex items-center gap-2.5 whitespace-nowrap rounded-md text-md font-semibold tracking-tight no-underline outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", className)}
       href={href}
       aria-label="SimLab by OffGrid, home"
     >

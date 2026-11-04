@@ -24,18 +24,18 @@ export function pickMetric(metrics: Run["metrics"]): string | null {
   return ORDER.find((k) => names.includes(k)) ?? names[0] ?? null;
 }
 
-export function MetricChart({ run, name, height = 150 }: { run: Run; name: string; height?: number }) {
+export function MetricChart({ run, name, height = 150, compact }: { run: Run; name: string; height?: number; compact?: boolean }) {
   const pts = run.metrics[name] ?? [];
   const m = METRIC[name] ?? { label: name.replace(/_/g, " ") };
   return (
     <LineChart
-      series={[{ name: m.label, xs: pts.map((p) => p[0]), ys: pts.map((p) => p[1]), tone: name === "residual" ? "plum" : "sky" }]}
+      series={[{ name: m.label, xs: pts.map((p) => p[0]), ys: pts.map((p) => p[1]), color: name === "residual" ? 3 : 1 }]}
       yLog={m.log}
       height={height}
       fmtX={(v) => si(v)}
       fmtY={(v) => (m.log ? (v >= 0.001 ? n(v) : v.toExponential(0)) : `${n(v, 3)}${m.unit ? ` ${m.unit}` : ""}`)}
       label={`${m.label} as the run goes on`}
-      yLabel={`${m.label}${m.unit ? ` (${m.unit})` : ""}`}
+      yLabel={compact ? undefined : `${m.label}${m.unit ? ` (${m.unit})` : ""}`}
       xLabel="step"
     />
   );

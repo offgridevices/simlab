@@ -112,7 +112,7 @@ function describe(rec: ModelRec) {
 
 function pickMaker(fileName: string): () => SampleMesh {
   const f = fileName.toLowerCase();
-  if (/dense|2m/.test(f)) return () => makePropeller({ stations: 1200, around: 280, hubSegments: 256 });
+  if (/dense|2m|scan/.test(f)) return () => makePropeller({ stations: 1200, around: 280, hubSegments: 256, onePiece: true });
   if (/prop/.test(f)) return () => makePropeller();
   if (/mount/.test(f)) return makeMount;
   return makeFrame;
@@ -123,7 +123,8 @@ function pickMaker(fileName: string): () => SampleMesh {
 const DURATION: Record<StudyConfig["kind"], number> = { strength: 9000, wind: 12000, prop: 3500 };
 
 function brief(r: Run): RunBrief {
-  return { id: r.id, status: r.status, engine: r.engine, progress: r.progress, created_at: r.created_at, finished_at: r.finished_at ?? null, headline: r.headline ?? null };
+  const verdict = r.summary?.kind === "strength" && r.status === "done" ? r.summary.verdict : null;
+  return { id: r.id, status: r.status, engine: r.engine, progress: r.progress, created_at: r.created_at, finished_at: r.finished_at ?? null, headline: r.headline ?? null, verdict };
 }
 
 function solve(rec: RunRec) {
@@ -345,6 +346,8 @@ function seed() {
   const pg = pm.model.suggestions!.prop!;
   const s4 = addStudy(propP, pm, "Thrust sweep", { kind: "prop", axis: pg.axis, center_mm: pg.center_mm, rpm_min: 5000, rpm_max: 32000, rpm_steps: 12, airspeeds_m_s: [0, 10, 20], blades: pg.blades }, minutesAgo(420));
   newRun(s4, { done: true, at: minutesAgo(410) });
+  const s4b = addStudy(propP, pm, "Thrust sweep, as a 2-blade", { kind: "prop", axis: pg.axis, center_mm: pg.center_mm, rpm_min: 5000, rpm_max: 32000, rpm_steps: 12, airspeeds_m_s: [0, 10], blades: 2 }, minutesAgo(380));
+  newRun(s4b, { done: true, at: minutesAgo(370) });
   const hub = (pm.model.patches ?? []).filter((p) => /shaft hole|bottom face/i.test(p.label ?? "")).map((p) => p.id);
   const s5 = addStudy(
     propP,
@@ -368,8 +371,8 @@ function seed() {
   const mountP = addProject("Motor mount", "Drawn in inches by mistake.", 60 * 26);
   addModel(mountP, "Mount plate", "motor-mount.stl", makeMount);
 
-  const denseP = addProject("Dense prop scan", "A 2-million-triangle model, to check the 3D view stays smooth.", 60 * 24 * 3);
-  const dense = addModel(denseP, "Scan, full detail", "prop-scan-dense.stl", () => makePropeller({ stations: 1200, around: 280, hubSegments: 256 }), 1, false);
+  const denseP = addProject("Prop scan (one smooth surface)", "A 2-million-triangle scan that comes in as one face: hold it with the brush or Hold the hub.", 60 * 24 * 3);
+  const dense = addModel(denseP, "Scan, full detail", "prop-scan-dense.stl", () => makePropeller({ stations: 1200, around: 280, hubSegments: 256, onePiece: true }), 1, false);
   // described lazily: it takes a moment to make
   dense.model = { ...dense.model, status: "ready", message: "", triangles: 3 * 1199 * 280 * 2 + 3 * 280 + 4 * 256 * 2, size_mm: [127, 127, 14], bbox_mm: { min: [-63.5, -63.5, -7], max: [63.5, 63.5, 7] } };
   (dense as ModelRec & { lazy?: boolean }).lazy = true;

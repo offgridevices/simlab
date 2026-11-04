@@ -1,6 +1,6 @@
 // Ready-made setups the app offers: motors on every mount it found, a
 // propeller spinning at a speed, and the defaults for each kind of test.
-import type { Load, Model, Motor, PropConfig, StrengthConfig, StudyConfig, StudyKind, Vec3, WindConfig } from "../lib/types";
+import { REGION_ID_BASE, type Load, type Model, type Motor, type PropConfig, type Region, type StrengthConfig, type StudyConfig, type StudyKind, type Vec3, type WindConfig } from "../lib/types";
 import { G } from "../lib/format";
 
 /** shaft torque at full throttle (as crates/core Motor::est_torque_nm): 80% of electrical power over the loaded shaft speed */
@@ -51,11 +51,14 @@ export function presetSpin(model: Model, rpm: number, airspeed = 0): Preset {
   const axis = g?.axis ?? [0, 0, 1];
   const center = g?.center_mm ?? [0, 0, 0];
   const held = g ? hubFaces(model, center, axis, g.radius_mm) : [];
+  // a smooth part with no hub faces of its own: hold a round area around the axis instead
+  const hubArea: Region | null = !held.length && g ? { id: REGION_ID_BASE, label: "Hub", shape: { type: "cylinder", axis, center_mm: center, radius_mm: g.hub_radius_mm ?? g.radius_mm * 0.11 } } : null;
   return {
     name: `Spinning at ${Math.round(rpm).toLocaleString("en-US")} rpm`,
     config: {
       kind: "strength",
-      support: held.length ? { type: "fixed", patches: held } : { type: "free_flying" },
+      ...(hubArea ? { regions: [hubArea] } : {}),
+      support: held.length ? { type: "fixed", patches: held } : hubArea ? { type: "fixed", patches: [hubArea.id] } : { type: "free_flying" },
       loads: [
         { type: "spin", rpm, axis, center_mm: center, label: "Spin" },
         { type: "prop_aero", rpm, airspeed_m_s: airspeed, axis, center_mm: center, label: "Air load" },

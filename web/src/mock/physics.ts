@@ -2,7 +2,8 @@
 // spinning-disc stress, a propeller's thrust coefficient, a wake behind a
 // body) that give plausible numbers and fields in a few milliseconds. Not a
 // simulation; it only has to look and behave like one.
-import type { FieldInfo, Load, Material, Model, PropConfig, PropSummary, Slice, StrengthConfig, StrengthSummary, Vec3, WindConfig, WindSummary } from "../lib/types";
+import type { Accuracy, FieldInfo, Load, Material, Model, PropConfig, PropSummary, Region, Slice, StrengthConfig, StrengthSummary, Vec3, WindConfig, WindSummary } from "../lib/types";
+import { regionCentre } from "../lib/regions";
 import { SEA_LEVEL_AIR } from "../lib/types";
 import type { SampleMesh } from "../lib/samples";
 import { n as fmt } from "../lib/format";
@@ -80,7 +81,7 @@ export function strength(mesh: SampleMesh, model: Model, cfg: StrengthConfig, ma
       const pad: Vec3 = [L * Math.cos(a), L * Math.sin(a), 0];
       let f = 0;
       for (const mo of motors) {
-        const centre = patchCentre(mesh, mo.patches);
+        const centre = patchCentre(mesh, mo.patches, cfg.regions);
         const near = centre ? Math.hypot(centre[0] - pad[0], centre[1] - pad[1]) < 30 : true;
         if (!near) continue;
         const share = centre ? 1 : 1 / 4;
@@ -148,7 +149,7 @@ export function strength(mesh: SampleMesh, model: Model, cfg: StrengthConfig, ma
     where = "at the blade root";
   } else {
     // anything else: stress spreads out from where the loads meet the holds
-    const held = cfg.support.type === "fixed" ? patchCentre(mesh, cfg.support.patches) : null;
+    const held = cfg.support.type === "fixed" ? patchCentre(mesh, cfg.support.patches, cfg.regions) : null;
     const total = motors.reduce((s, m) => s + m.thrust_n, 0) + cfg.loads.reduce((s, l) => s + (l.type === "force" ? Math.hypot(...l.force_n) : 0), 0) + Math.hypot(...accel) * 0.05;
     const size = model.size_mm ? Math.max(...model.size_mm) : 30;
     const centre = held ?? model.bbox_mm?.min ?? [0, 0, 0];
@@ -160,6 +161,9 @@ export function strength(mesh: SampleMesh, model: Model, cfg: StrengthConfig, ma
     }
   }
 
+  // the biggest pull (+) or push (−): bending pulls one side of the part and pushes the other
+  const mp = new Float32Array(nv);
+  for (let i = 0; i < nv; i++) mp[i] = vm[i]! * (N[i * 3 + 2]! < 0 ? 1.04 : -0.6);
   const sf = new Float32Array(nv);
   const fi = new Float32Array(nv);
   let crit = 0;
@@ -196,6 +200,8 @@ export function strength(mesh: SampleMesh, model: Model, cfg: StrengthConfig, ma
     critical_patch: mesh.vertexPatch[crit] ?? null,
     breaks_at: { load_factor: minSf, rpm: breaksRpm, text: `Breaks ${breaksText}` },
     mass_g: (volume(mesh) * unit ** 3 * 1e-9 * mat.density * 1000),
+    element_mm: { draft: 3, normal: 1.6, fine: 0.8, custom: 1.2 }[cfg.quality.type] * (looks === "propeller" ? 0.5 : 1),
+    accuracy: STRENGTH_ACCURACY,
     elements,
     nodes,
     dofs: nodes * 3,
@@ -206,22 +212,30 @@ export function strength(mesh: SampleMesh, model: Model, cfg: StrengthConfig, ma
     warnings: mat.process === "fdm" && Math.abs(dot(norm(up), [0, 0, 1])) < 0.9 ? ["Printed on its side, the layers carry this load across their weakest direction."] : [],
   };
   const fields: FieldSet = {
-    values: { safety_factor: sf, von_mises: vm, displacement: disp, failure_index: fi, ux, uy, uz },
+    values: { safety_factor: sf, von_mises: vm, max_principal: mp, displacement: disp, failure_index: fi, ux, uy, uz },
+    // the same names, labels and units as crates/fea surface_fields
     infos: [
-      info("safety_factor", "Safety factor", "×", sf),
       info("von_mises", "Stress (von Mises)", "MPa", vm),
-      info("displacement", "How far it bends", "mm", disp),
-      info("failure_index", "Failure index", "", fi),
-      info("ux", "Movement, X", "mm", ux),
-      info("uy", "Movement, Y", "mm", uy),
-      info("uz", "Movement, Z", "mm", uz),
+      info("max_principal", "Largest pull (max principal stress)", "MPa", mp, { diverging: true }),
+      info("failure_index", "Failure index (1 = breaks)", "", fi),
+      info("safety_factor", "Safety factor", "×", sf),
+      info("displacement", "Movement", "mm", disp),
+      info("ux", "Movement x", "mm", ux, { diverging: true }),
+      info("uy", "Movement y", "mm", uy, { diverging: true }),
+      info("uz", "Movement z", "mm", uz, { diverging: true }),
     ],
   };
   return { fields, summary };
 }
 
-function patchCentre(mesh: SampleMesh, ids: number[]): Vec3 | null {
+function patchCentre(mesh: SampleMesh, ids: number[], regions: Region[] = []): Vec3 | null {
+  // areas picked by shape count by their middle
+  const fromRegions = ids.flatMap((i) => {
+    const r = regions.find((x) => x.id === i);
+    return r ? [regionCentre(r.shape)] : [];
+  });
   const ps = ids.map((i) => mesh.patches[i]).filter((p) => !!p);
+  if (!ps.length && fromRegions.length) return [0, 1, 2].map((k) => fromRegions.reduce((s, c) => s + c[k]!, 0) / fromRegions.length) as Vec3;
   if (!ps.length) return null;
   const a = ps.reduce((s, p) => s + p.area_mm2, 0) || 1;
   return [0, 1, 2].map((k) => ps.reduce((s, p) => s + p.center_mm[k]! * p.area_mm2, 0) / a) as Vec3;
@@ -438,5 +452,19 @@ export function prop(model: Model, cfg: PropConfig): PropSummary {
     geometry,
     points,
     warnings: [],
+    accuracy: PROP_ACCURACY,
   };
 }
+
+// the engine's own words (crates/engine solve.rs accuracy())
+const STRENGTH_ACCURACY: Accuracy = {
+  method: "Finite elements (quadratic tetrahedra) with print-direction-aware material and Tsai-Hill failure check",
+  checked_against: "CalculiX 2.21 on the same mesh; textbook and NAFEMS benchmarks",
+  typical_error:
+    "Matches CalculiX within 0.004%; benchmarks within 0.03–0.8%. The real-world limit is how strong your print really is (layer bonding, infill, moisture), so treat a safety factor under 2 as risky.",
+};
+const PROP_ACCURACY: Accuracy = {
+  method: "Blade element momentum theory with low-Reynolds airfoil data",
+  checked_against: "University of Illinois measured propeller data",
+  typical_error: "Thrust within about 10% when the blade section is known; torque about 10% low. Use the wind tunnel for the precise number.",
+};

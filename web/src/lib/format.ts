@@ -60,7 +60,7 @@ export const STATUS_TONE: Record<RunStatus, Tone> = { queued: "neutral", running
  * Built from the run's one-sentence headline, since a run brief carries
  * nothing else about the result.
  */
-export function pillFor(r: Pick<RunBrief, "status" | "headline" | "progress"> | null | undefined): { tone: Tone; text: string } | null {
+export function pillFor(r: (Pick<RunBrief, "status" | "headline" | "progress"> & { verdict?: RunBrief["verdict"] }) | null | undefined): { tone: Tone; text: string } | null {
   if (!r) return null;
   if (r.status === "queued") return { tone: "neutral", text: "Waiting" };
   if (r.status === "running") return { tone: "ember", text: `Running ${Math.round((r.progress || 0) * 100)}%` };
@@ -69,6 +69,11 @@ export function pillFor(r: Pick<RunBrief, "status" | "headline" | "progress"> | 
   const h = (r.headline ?? "").trim();
   if (!h) return { tone: "moss", text: "Done" };
   const times = /(\d+(?:\.\d+)?)\s*×/.exec(h)?.[1];
+  // the engine's own verdict wins over reading the sentence
+  const v = r.verdict ?? (/^safe/i.test(h) ? "safe" : /^marginal/i.test(h) ? "marginal" : /^breaks?/i.test(h) ? "breaks" : null);
+  if (v === "safe") return { tone: "moss", text: times ? `Safe ${times}×` : "Safe" };
+  if (v === "marginal") return { tone: "gold", text: times ? `Marginal ${times}×` : "Marginal" };
+  if (v === "breaks") return { tone: "clay", text: /^breaks?/i.test(h) ? firstClause(h).replace(/\babout\s+/i, "") : "Breaks" };
   if (/^safe/i.test(h)) return { tone: "moss", text: times ? `Safe ${times}×` : "Safe" };
   if (/^marginal/i.test(h)) return { tone: "gold", text: times ? `Marginal ${times}×` : "Marginal" };
   if (/^breaks?/i.test(h)) return { tone: "clay", text: firstClause(h).replace(/\babout\s+/i, "") };

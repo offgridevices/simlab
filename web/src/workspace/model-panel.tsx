@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FanIcon, PlusIcon, RulerIcon, SparklesIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Loader } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -129,7 +130,7 @@ export function ModelPanel({ data, model, nav, prepared, reload }: { data: Proje
             <PlusIcon />
             {busy === "upload" ? "Adding…" : "Add a part"}
           </Button>
-          <input ref={file} type="file" accept=".stl,.step,.stp,.obj,.3mf" className="hidden" onChange={(e) => addPart(e.target.files?.[0])} />
+          <Input ref={file} type="file" accept=".stl,.step,.stp,.obj,.3mf" className="hidden" onChange={(e) => addPart(e.target.files?.[0])} />
         </>
       }
     >
@@ -150,15 +151,15 @@ export function ModelPanel({ data, model, nav, prepared, reload }: { data: Proje
       {!model ? (
         <p className="text-sm text-muted-foreground">No part yet. Add an STL, STEP, OBJ or 3MF file to start.</p>
       ) : model.status === "processing" ? (
-        <div className="flex flex-col gap-3 rounded-xl bg-sunken p-4 text-sm text-soft">
+        <Card className="gap-3 bg-sunken p-4 text-sm text-soft">
           <Loader />
           {model.message || "Reading the part and finding its faces"}
-        </div>
+        </Card>
       ) : model.status === "failed" ? (
-        <div className="flex flex-col gap-2 rounded-xl bg-clay/10 p-4 text-sm text-clay-text" role="alert">
+        <Card className="gap-2 border-clay/40 bg-clay/10 p-4 text-sm text-clay-text" role="alert">
           <span className="font-medium">This file could not be read.</span>
           <span>{model.message}</span>
-        </div>
+        </Card>
       ) : (
         <>
           <div className="flex flex-col gap-1">
@@ -171,7 +172,7 @@ export function ModelPanel({ data, model, nav, prepared, reload }: { data: Proje
           </div>
 
           {q && (
-            <div className="flex flex-col gap-3 rounded-xl border border-gold/40 bg-gold/10 p-4" role="alert" data-testid="units-check">
+            <Card className="gap-3 border-gold/40 bg-gold/10 p-4" role="alert" data-testid="units-check">
               <div className="flex items-start gap-2.5 text-sm text-gold-text">
                 <RulerIcon className="mt-0.5 size-4 shrink-0" />
                 <span>
@@ -191,7 +192,7 @@ export function ModelPanel({ data, model, nav, prepared, reload }: { data: Proje
                   It really is {n(q.across)} mm
                 </Button>
               </div>
-            </div>
+            </Card>
           )}
 
           <div className="grid grid-cols-2 gap-2">
@@ -255,7 +256,7 @@ export function ModelPanel({ data, model, nav, prepared, reload }: { data: Proje
 
 function Suggestion({ icon, title, detail, children }: { icon: React.ReactNode; title: string; detail: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-plum/30 bg-plum/[0.08] p-4" data-testid="suggestion">
+    <Card className="gap-3 border-plum/30 bg-plum/[0.08] p-4" data-testid="suggestion">
       <div className="flex items-start gap-2.5">
         <span className="mt-0.5 text-plum-text [&_svg]:size-4">{icon}</span>
         <span className="flex flex-col gap-0.5 text-sm">
@@ -264,7 +265,7 @@ function Suggestion({ icon, title, detail, children }: { icon: React.ReactNode; 
         </span>
       </div>
       <div className="flex flex-wrap gap-2">{children}</div>
-    </div>
+    </Card>
   );
 }
 
@@ -282,7 +283,7 @@ function PickedFace({ model, patch, hole, onSaved, onClose }: { model: Model; pa
     }
   };
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-ember/40 bg-ember/[0.05] p-4" data-testid="picked-face">
+    <Card className="gap-3 border-ember/40 bg-ember/[0.05] p-4" data-testid="picked-face">
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col gap-0.5">
           <span className="font-semibold">{patchLabel(patch, hole)}</span>
@@ -311,6 +312,6 @@ function PickedFace({ model, patch, hole, onSaved, onClose }: { model: Model; pa
           {saving ? "Saving…" : "Save"}
         </Button>
       </form>
-    </div>
+    </Card>
   );
 }

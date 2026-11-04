@@ -1,7 +1,9 @@
-// Panel building blocks: a titled section, a row of a label and a value,
-// a little disclosure for the details most people skip.
+// Panel building blocks: a titled section, a readout (label over a number
+// with its unit), a row of label and value, and a disclosure for the details
+// most people skip (shadcn Collapsible).
 import type { ReactNode } from "react";
 import { ChevronDownIcon } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
 export function Section({ title, aside, children, className }: { title: ReactNode; aside?: ReactNode; children: ReactNode; className?: string }) {
@@ -16,10 +18,11 @@ export function Section({ title, aside, children, className }: { title: ReactNod
   );
 }
 
+/** an instrument readout: a small label, the number in mono with its unit, a line of context */
 export function Stat({ label, value, unit, hint, className }: { label: ReactNode; value: ReactNode; unit?: string; hint?: ReactNode; className?: string }) {
   return (
-    <div className={cn("flex min-w-0 flex-col gap-0.5 rounded-lg bg-sunken px-3 py-2.5", className)}>
-      <span className="truncate text-xs text-muted-foreground">{label}</span>
+    <div className={cn("flex min-w-0 flex-col gap-0.5 rounded-md border bg-sunken px-3 py-2.5", className)}>
+      <span className="truncate text-2xs font-medium uppercase tracking-wider text-muted-foreground">{label}</span>
       <span className="num text-lg font-semibold leading-tight">
         {value}
         {unit && <span className="ml-1 text-sm font-normal text-muted-foreground">{unit}</span>}
@@ -40,12 +43,12 @@ export function Row({ label, children }: { label: ReactNode; children: ReactNode
 
 export function Details({ summary, children, testId, defaultOpen }: { summary: ReactNode; children: ReactNode; testId?: string; defaultOpen?: boolean }) {
   return (
-    <details className="group rounded-lg border" data-testid={testId} open={defaultOpen}>
-      <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
+    <Collapsible defaultOpen={defaultOpen} className="group rounded-lg border" data-testid={testId}>
+      <CollapsibleTrigger className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm font-medium outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
         <span className="grow">{summary}</span>
-        <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
-      </summary>
-      <div className="border-t px-3 py-2">{children}</div>
-    </details>
+        <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" aria-hidden="true" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="border-t px-3 py-2">{children}</CollapsibleContent>
+    </Collapsible>
   );
 }

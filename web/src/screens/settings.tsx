@@ -1,5 +1,6 @@
 // Settings: how much of the Mac SimLab may use, the system check, connecting
 // Claude, and your own materials and motors.
+import { Label } from "@/components/ui/label";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { CheckIcon, CopyIcon, MonitorIcon, MoonIcon, PlusIcon, SunIcon, Trash2Icon } from "lucide-react";
 import { Screen, TopBar } from "../components/topbar";
@@ -10,7 +11,10 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Loader } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { toast } from "sonner";
+import { Confirm } from "../components/confirm";
 import { useApp, useEvents, MOCK } from "../lib/app";
 import { getTheme, setTheme, type ThemeChoice } from "../lib/theme";
 import { n, type Tone } from "../lib/format";
@@ -33,12 +37,11 @@ export default function Settings() {
   const [health, setHealth] = useState<Health | null>(null);
   const [settings, setSettings] = useState<SettingsT | null>(null);
   const [saved, setSaved] = useState<SettingsT | null>(null);
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [theme, setThemeState] = useState<ThemeChoice>(getTheme);
   const [asking, setAsking] = useState<Check | null>(null);
 
   useEffect(() => {
-    api.health().then(setHealth, (e: Error) => setMsg({ ok: false, text: e.message }));
+    api.health().then(setHealth, (e: Error) => toast.error(e.message));
     api.settings().then((s) => {
       setSettings(s);
       setSaved(s);
@@ -56,9 +59,9 @@ export default function Settings() {
       const s = await api.saveSettings(settings);
       setSettings(s);
       setSaved(s);
-      setMsg({ ok: true, text: "Saved." });
+      toast.success("Settings saved");
     } catch (e) {
-      setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not save" });
+      toast.error(e instanceof Error ? e.message : "Could not save");
     }
   };
   const runFix = async (c: Check) => {
@@ -66,7 +69,7 @@ export default function Settings() {
     try {
       await api.fix(c.id);
     } catch (e) {
-      setMsg({ ok: false, text: e instanceof Error ? e.message : "Could not start the fix" });
+      toast.error(e instanceof Error ? e.message : "Could not start the fix");
     }
   };
 
@@ -103,7 +106,7 @@ export default function Settings() {
             <Loader />
           ) : (
             <div className="flex flex-col gap-6">
-              <label className="flex flex-col gap-3">
+              <Label className="flex flex-col items-stretch gap-3">
                 <span className="flex items-baseline justify-between gap-2 text-sm font-medium">
                   Memory budget
                   <span className="num text-base">
@@ -112,8 +115,8 @@ export default function Settings() {
                 </span>
                 <Slider min={1} max={Math.max(2, ramGb - 2)} step={1} value={[settings.memory_budget_gb]} onValueChange={([v]) => setSettings({ ...settings, memory_budget_gb: v! })} aria-label="Memory budget in GB" data-testid="memory-slider" />
                 <span className="text-xs text-muted-foreground">Half the Mac's memory ({Math.round(ramGb / 2)} GB) is a good start.</span>
-              </label>
-              <label className="flex flex-col gap-3">
+              </Label>
+              <Label className="flex flex-col items-stretch gap-3">
                 <span className="flex items-baseline justify-between gap-2 text-sm font-medium">
                   Processor cores for the strength test
                   <span className="num text-base">
@@ -121,7 +124,7 @@ export default function Settings() {
                   </span>
                 </span>
                 <Slider min={1} max={health.machine.cores} step={1} value={[settings.cpu_threads]} onValueChange={([v]) => setSettings({ ...settings, cpu_threads: v! })} aria-label="Processor cores" />
-              </label>
+              </Label>
               <div className="flex flex-col gap-2">
                 <span className="text-sm font-medium">Files without units (STL, OBJ) are in</span>
                 <Segmented
@@ -135,22 +138,17 @@ export default function Settings() {
                   ]}
                 />
               </div>
-              <label className="flex items-center justify-between gap-4 text-sm">
+              <Label className="flex items-center justify-between gap-4 text-sm">
                 <span>
                   <span className="font-medium">Double-check with reference solvers</span>
                   <span className="block text-muted-foreground">Offers to re-run tests in CalculiX and OpenFOAM (in Docker). Slower; needs the system check below.</span>
                 </span>
                 <Switch checked={settings.reference_engine_enabled} onCheckedChange={(v) => setSettings({ ...settings, reference_engine_enabled: v })} aria-label="Double-check with reference solvers" />
-              </label>
+              </Label>
               <div className="flex items-center gap-3">
                 <Button onClick={save} disabled={!dirty} data-testid="save-settings">
                   {dirty ? "Save" : "Saved"}
                 </Button>
-                {msg && (
-                  <span className={msg.ok ? "text-sm text-moss-text" : "text-sm text-destructive"} role="status">
-                    {msg.text}
-                  </span>
-                )}
               </div>
             </div>
           )}
@@ -160,9 +158,9 @@ export default function Settings() {
           {!health ? (
             <Loader />
           ) : (
-            <ul className="overflow-hidden rounded-lg border" data-testid="checks">
+            <Card className="gap-0 overflow-hidden py-0 shadow-none" data-testid="checks" role="list">
               {health.checks.map((c) => (
-                <li key={c.id} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-3 py-3 last:border-b-0" data-testid="check-row">
+                <div key={c.id} role="listitem" className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-3 py-3 last:border-b-0" data-testid="check-row">
                   <span className="flex min-w-0 flex-[1_1_14rem] flex-col">
                     <span className="text-sm font-medium">{c.label}</span>
                     <span className="text-xs text-muted-foreground">{c.detail}</span>
@@ -173,9 +171,9 @@ export default function Settings() {
                       {c.fix.label}
                     </Button>
                   )}
-                </li>
+                </div>
               ))}
-            </ul>
+            </Card>
           )}
           <p className="text-xs text-muted-foreground">Your projects and results are kept in {health?.data_dir ?? "SimLab's folder"}. Nothing is uploaded.</p>
         </Block>
@@ -200,35 +198,30 @@ export default function Settings() {
         <MotorsEditor />
       </main>
 
-      <Dialog open={!!asking} onOpenChange={(o) => !o && setAsking(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{asking?.label}</DialogTitle>
-            <DialogDescription>{asking?.fix?.asks}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAsking(null)}>
-              Not now
-            </Button>
-            <Button onClick={() => asking && runFix(asking)} data-testid="fix-confirm">
-              {asking?.fix?.label ?? "Go ahead"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <Confirm
+        open={!!asking}
+        onOpenChange={(o) => !o && setAsking(null)}
+        title={asking?.label ?? ""}
+        description={asking?.fix?.asks ?? ""}
+        action={asking?.fix?.label ?? "Go ahead"}
+        cancel="Not now"
+        destructive={false}
+        onConfirm={() => (asking ? runFix(asking) : undefined)}
+        testId="fix-confirm"
+      />
     </Screen>
   );
 }
 
 function Block({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
   return (
-    <section className="flex flex-col gap-4 rounded-xl border bg-card p-5">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-base font-semibold">{title}</h2>
-        {description && <p className="text-sm text-muted-foreground">{description}</p>}
-      </div>
-      {children}
-    </section>
+    <Card className="gap-4">
+      <CardHeader>
+        <CardTitle className="text-base">{title}</CardTitle>
+        {description && <CardDescription>{description}</CardDescription>}
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">{children}</CardContent>
+    </Card>
   );
 }
 
@@ -247,6 +240,7 @@ export function CopyBlock({ text, testId }: { text: string; testId?: string }) {
       t.remove();
     }
     setDone(true);
+    toast.success("Copied");
     setTimeout(() => setDone(false), 1600);
   };
   return (
@@ -264,13 +258,13 @@ export function CopyBlock({ text, testId }: { text: string; testId?: string }) {
 
 function Num({ label, value, onChange, unit, step }: { label: string; value: number; onChange(v: number): void; unit?: string; step?: number }) {
   return (
-    <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+    <Label className="flex flex-col items-stretch gap-1 text-xs font-medium text-muted-foreground">
       {label}
       <span className="flex items-center gap-1.5">
         <Input type="number" inputMode="decimal" step={step ?? "any"} className="num" value={Number.isFinite(value) ? value : ""} onChange={(e) => onChange(Number(e.target.value))} />
         {unit && <span className="shrink-0 text-xs font-normal">{unit}</span>}
       </span>
-    </label>
+    </Label>
   );
 }
 
@@ -318,28 +312,31 @@ function MaterialsEditor() {
       {draft ? (
         <form className="flex flex-col gap-4 rounded-lg border p-4" onSubmit={submit} data-testid="material-form">
           <div className="flex flex-wrap items-end gap-3">
-            <label className="flex min-w-48 flex-1 flex-col gap-1 text-xs font-medium text-muted-foreground">
+            <Label className="flex min-w-48 flex-1 flex-col gap-1 text-xs font-medium text-muted-foreground">
               Name
               <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="My PETG-CF" required />
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+            </Label>
+            <Label className="flex flex-col items-stretch gap-1 text-xs font-medium text-muted-foreground">
               Start from
-              <select
-                className="h-9 rounded-md border border-input bg-sunken/60 px-2 text-sm text-foreground outline-none"
+              <Select
                 value=""
-                onChange={(e) => {
-                  const m = materials?.find((x) => x.id === e.target.value);
+                onValueChange={(v) => {
+                  const m = materials?.find((x) => x.id === v);
                   if (m) setDraft({ ...m, id: draft.id, name: draft.name || `${m.name} (mine)`, custom: true });
                 }}
               >
-                <option value="">A built-in…</option>
-                {materials?.filter((m) => !m.custom).map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <SelectTrigger className="w-48">
+                  <SelectValue placeholder="A built-in…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {materials?.filter((m) => !m.custom).map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Label>
           </div>
           <Segmented
             label="How it is made"
@@ -423,10 +420,10 @@ function MotorsEditor() {
       )}
       {draft ? (
         <form className="flex flex-col gap-4 rounded-lg border p-4" onSubmit={submit} data-testid="motor-form">
-          <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+          <Label className="flex flex-col items-stretch gap-1 text-xs font-medium text-muted-foreground">
             Name
             <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="2306 2400 KV" required />
-          </label>
+          </Label>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             <Num label="Push at full throttle" unit="g" value={draft.max_thrust_g} onChange={(v) => setDraft({ ...draft, max_thrust_g: v })} />
             <Num label="Motor weight" unit="g" value={draft.mass_g} onChange={(v) => setDraft({ ...draft, mass_g: v })} />
@@ -435,10 +432,10 @@ function MotorsEditor() {
             <Num label="Battery voltage" unit="V" value={draft.voltage_v} onChange={(v) => setDraft({ ...draft, voltage_v: v })} />
             <Num label="Bolt pattern" unit="mm" value={draft.mount_mm} onChange={(v) => setDraft({ ...draft, mount_mm: v })} />
           </div>
-          <label className="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+          <Label className="flex flex-col items-stretch gap-1 text-xs font-medium text-muted-foreground">
             Propeller used for the push number
             <Input value={draft.prop} onChange={(e) => setDraft({ ...draft, prop: e.target.value })} />
-          </label>
+          </Label>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <div className="flex gap-2">
             <Button type="submit" data-testid="save-motor">

@@ -1,0 +1,229 @@
+/* SimLab design tokens: every design decision in one place.
+   Colours (dark and light), the named status colours, the 3D view, chart
+   series, colour-scale choices, fonts, type sizes, radii, spacing, shadows
+   and motion. globals.css maps these into Tailwind's theme; components use
+   only those theme classes or these variables, never raw values. The app's
+   startup splash reads this same file.
+
+   Dark is the default; a device that prefers light gets light;
+   <html data-theme="light|dark"> always wins.
+
+   The chrome is warm (the OffGrid palette, ember accent). The 3D view is
+   neutral grey so result colours read true. */
+
+:root {
+  /* ---------------------------------------------------------------- type */
+  --font-sans-family: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono-family: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  --text-base-size: 14px;
+  --text-2xs-size: 0.625rem; /* 10 px: axis ticks, legend ticks */
+  --text-2xs-leading: 0.875rem;
+  --text-md-size: 0.9375rem; /* 15 px: the lockup, large buttons */
+  --text-md-leading: 1.375rem;
+  --leading-body: 1.5;
+
+  /* ---------------------------------------------------------------- shape */
+  --radius: 0.625rem;
+  --radius-hairline: 0.125rem;
+  --radius-check: 0.25rem;
+  --spacing-unit: 0.25rem;
+  --ring-width: 3px;
+
+  /* ---------------------------------------------------------------- motion */
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-view: 320ms; /* camera moves in the 3D view */
+  --duration-pulse: 1.6s; /* the ring at the weakest spot */
+  --ease-out: cubic-bezier(0.2, 0.6, 0.3, 1);
+
+  /* ---------------------------------------------------------------- colour scales
+     which scale each kind of result uses (the scales' colour stops are data,
+     in src/lib/colormap-data.ts; the safety scale is built from the status
+     colours below) */
+  --map-magnitude: viridis; /* stress, air speed, failure index */
+  --map-movement: cividis; /* how far the part moves */
+  --map-signed: coolwarm; /* pressure, signed stress */
+  --map-safety: safety;
+
+  /* ---------------------------------------------------------------- dark */
+  --background: #14110d;
+  --foreground: #f1ece0;
+  --card: #1d1915;
+  --card-foreground: #f1ece0;
+  --popover: #1d1915;
+  --popover-foreground: #f1ece0;
+  --primary: #ff6a00;
+  --primary-foreground: #1b1813;
+  --secondary: #2a241d;
+  --secondary-foreground: #f1ece0;
+  --muted: #2a241d;
+  --muted-foreground: #a89e8e;
+  --accent: #2a241d;
+  --accent-foreground: #f1ece0;
+  --destructive: #f07a5a;
+  --destructive-foreground: #1b1813;
+  --border: rgba(241, 236, 224, 0.09);
+  --input: rgba(241, 236, 224, 0.15);
+  --ring: #ff8a3d;
+  --sunken: #100d0a;
+  --soft: #cfc5b3;
+  --scrim: rgba(8, 6, 4, 0.6);
+  --shadow-overlay: 0 12px 32px -8px rgba(0, 0, 0, 0.45);
+  --shadow-float: 0 6px 16px -6px rgba(0, 0, 0, 0.35);
+
+  /* named colours: a fill and the text that reads on its 14% tint */
+  --ember: #ff6a00;
+  --ember-text: #ff9a52;
+  --moss: #8cc084;
+  --moss-text: #a8d39f;
+  --sky: #6fa8e8;
+  --sky-text: #9cc4f0;
+  --gold: #f0b84a;
+  --gold-text: #f3c76e;
+  --plum: #c39bd3;
+  --plum-text: #d4b5e0;
+  --clay: #f07a5a;
+  --clay-text: #f7a088;
+  /* text on a solid named colour */
+  --on-color: #1b1813;
+
+  /* the 3D view: cool neutral, so result colours read true */
+  --viewer-a: #2c3036; /* centre of the soft spotlight */
+  --viewer-b: #141619; /* edges */
+  --viewer-grid: #4a5058; /* ground grid lines */
+  --viewer-grid-major: #5d646d;
+  --part: #a9aeb5; /* the part before it has results */
+  --part-hover: #ff6a00;
+  --hud: rgba(20, 22, 25, 0.82); /* readouts drawn over the view */
+  --hud-foreground: #e9ebee;
+  --hud-muted: #9aa1aa;
+  --axis-x: #f07a5a;
+  --axis-y: #8cc084;
+  --axis-z: #6fa8e8;
+  --nan: #6b7078; /* where a result has no value */
+  --viewer-light-sky: #f4f6f8; /* the 3D view's lights: sky, ground, key */
+  --viewer-light-ground: #2a2e33;
+  --viewer-light-key: #ffffff;
+  --viewer-light-sky-intensity: 1.25;
+  --viewer-light-key-intensity: 1.6;
+  --viewer-grid-opacity: 0.55;
+
+  /* chart series, in order */
+  --chart-1: #6fa8e8;
+  --chart-2: #ff8a3d;
+  --chart-3: #c39bd3;
+  --chart-4: #8cc084;
+  --chart-5: #f0b84a;
+  --chart-grid: rgba(241, 236, 224, 0.08);
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --background: #f7f4ec;
+    --foreground: #1b1813;
+    --card: #fffdf8;
+    --card-foreground: #1b1813;
+    --popover: #fffdf8;
+    --popover-foreground: #1b1813;
+    --primary: #ff6a00;
+    --primary-foreground: #1b1813;
+    --secondary: #efe9dc;
+    --secondary-foreground: #1b1813;
+    --muted: #efe9dc;
+    --muted-foreground: #6b6456;
+    --accent: #efe9dc;
+    --accent-foreground: #1b1813;
+    --destructive: #b3401f;
+    --destructive-foreground: #fffdf8;
+    --border: #e6dfd0;
+    --input: #d9cfbc;
+    --ring: #b34a00;
+    --sunken: #efeae0;
+    --soft: #4d473d;
+    --scrim: rgba(27, 24, 19, 0.45);
+    --shadow-overlay: 0 12px 32px -10px rgba(60, 45, 20, 0.25);
+    --shadow-float: 0 6px 16px -8px rgba(60, 45, 20, 0.22);
+    --ember-text: #a84300;
+    --moss-text: #3f6b37;
+    --sky-text: #2b5487;
+    --gold-text: #7a5410;
+    --plum-text: #66406f;
+    --clay-text: #a8381a;
+    --viewer-a: #fbfbfc;
+    --viewer-b: #dfe2e6;
+    --viewer-grid: #c3c8ce;
+    --viewer-grid-major: #a9afb6;
+    --part: #8f959c;
+    --hud: rgba(251, 251, 252, 0.88);
+    --hud-foreground: #1d2025;
+    --hud-muted: #5d636b;
+    --nan: #b4b8be;
+    --viewer-light-sky: #ffffff;
+    --viewer-light-ground: #8a9097;
+    --viewer-light-sky-intensity: 1.5;
+    --viewer-light-key-intensity: 1.35;
+    --viewer-grid-opacity: 0.8;
+    --chart-1: #2f6fb8;
+    --chart-2: #d65a00;
+    --chart-3: #8a5a9c;
+    --chart-4: #4f8a47;
+    --chart-5: #b07d18;
+    --chart-grid: rgba(27, 24, 19, 0.08);
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --background: #f7f4ec;
+  --foreground: #1b1813;
+  --card: #fffdf8;
+  --card-foreground: #1b1813;
+  --popover: #fffdf8;
+  --popover-foreground: #1b1813;
+  --primary: #ff6a00;
+  --primary-foreground: #1b1813;
+  --secondary: #efe9dc;
+  --secondary-foreground: #1b1813;
+  --muted: #efe9dc;
+  --muted-foreground: #6b6456;
+  --accent: #efe9dc;
+  --accent-foreground: #1b1813;
+  --destructive: #b3401f;
+  --destructive-foreground: #fffdf8;
+  --border: #e6dfd0;
+  --input: #d9cfbc;
+  --ring: #b34a00;
+  --sunken: #efeae0;
+  --soft: #4d473d;
+  --scrim: rgba(27, 24, 19, 0.45);
+  --shadow-overlay: 0 12px 32px -10px rgba(60, 45, 20, 0.25);
+  --shadow-float: 0 6px 16px -8px rgba(60, 45, 20, 0.22);
+  --ember-text: #a84300;
+  --moss-text: #3f6b37;
+  --sky-text: #2b5487;
+  --gold-text: #7a5410;
+  --plum-text: #66406f;
+  --clay-text: #a8381a;
+  --viewer-a: #fbfbfc;
+  --viewer-b: #dfe2e6;
+  --viewer-grid: #c3c8ce;
+  --viewer-grid-major: #a9afb6;
+  --part: #8f959c;
+  --hud: rgba(251, 251, 252, 0.88);
+  --hud-foreground: #1d2025;
+  --hud-muted: #5d636b;
+  --nan: #b4b8be;
+  --viewer-light-sky: #ffffff;
+  --viewer-light-ground: #8a9097;
+  --viewer-light-sky-intensity: 1.5;
+  --viewer-light-key-intensity: 1.35;
+  --viewer-grid-opacity: 0.8;
+  --chart-1: #2f6fb8;
+  --chart-2: #d65a00;
+  --chart-3: #8a5a9c;
+  --chart-4: #4f8a47;
+  --chart-5: #b07d18;
+  --chart-grid: rgba(27, 24, 19, 0.08);
+  color-scheme: light;
+}

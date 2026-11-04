@@ -4,6 +4,11 @@ import { useMemo, useState } from "react";
 import { FanIcon, PlusIcon, ShieldCheckIcon, Trash2Icon, WindIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Alert } from "@/components/ui/alert";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Confirm } from "../components/confirm";
 import { cn } from "@/lib/utils";
 import { useApp } from "../lib/app";
 import { useRun, type ProjectData } from "../lib/hooks";
@@ -64,13 +69,13 @@ function StudyList({ data, model, nav }: PanelProps) {
       }
     >
       {studies.length === 0 ? (
-        <div className="flex flex-col items-start gap-3 rounded-xl bg-sunken p-4">
+        <Card className="items-start gap-3 bg-sunken p-4">
           <p className="text-sm text-soft">No tests yet. Pick what you want to find out: will it break, how air flows around it, or how hard a propeller pushes.</p>
           <Button onClick={() => nav.go({ new: "pick" })} disabled={!model || model.status !== "ready"}>
             <PlusIcon />
             Set up a test
           </Button>
-        </div>
+        </Card>
       ) : (
         <ul className="flex flex-col gap-2" data-testid="study-list">
           {studies.map((s) => {
@@ -81,10 +86,12 @@ function StudyList({ data, model, nav }: PanelProps) {
             const waiting = runs.filter((r) => r.status === "queued").length;
             return (
               <li key={s.id}>
-                <button
-                  type="button"
-                  className="flex w-full flex-col gap-2 rounded-xl border bg-card px-3 py-3 text-left outline-none transition-colors hover:border-input hover:bg-foreground/[0.02] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                <Card
+                  role="button"
+                  tabIndex={0}
+                  className="gap-2 px-3 py-3 outline-none transition-colors hover:border-input hover:bg-foreground/[0.02] focus-visible:ring-[3px] focus-visible:ring-ring/50"
                   onClick={() => nav.go({ study: s.id, run: null })}
+                  onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), nav.go({ study: s.id, run: null }))}
                   data-testid="study-row"
                 >
                   <span className="flex items-center gap-3">
@@ -99,7 +106,7 @@ function StudyList({ data, model, nav }: PanelProps) {
                   </span>
                   {active && <Meter value={active.progress} tone="ember" label={`${s.name}: ${Math.round(active.progress * 100)}% done`} />}
                   {waiting > 0 && <span className="text-xs text-muted-foreground">{waiting === 1 ? "1 run waiting for its turn" : `${waiting} runs waiting for their turn`}</span>}
-                </button>
+                </Card>
               </li>
             );
           })}
@@ -123,12 +130,10 @@ function KindChooser({ model, nav }: PanelProps) {
       <p className="text-sm text-soft">What do you want to find out about {model?.name ?? "this part"}?</p>
       <div className="flex flex-col gap-2" role="list">
         {KINDS.map(({ kind, detail }) => (
-          <button
+          <Card
             key={kind}
-            type="button"
             role="listitem"
-            onClick={() => nav.go({ new: kind })}
-            className="flex items-start gap-3 rounded-xl border bg-card p-4 text-left outline-none transition-colors hover:border-ember/50 hover:bg-ember/[0.04] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="relative flex-row items-start gap-3 p-4 transition-colors focus-within:ring-[3px] focus-within:ring-ring/50 hover:border-ember/50 hover:bg-ember/[0.04]"
             data-testid={`kind-${kind}`}
           >
             <KindIcon kind={kind} className="size-10 [&_svg]:size-5" />
@@ -140,7 +145,8 @@ function KindChooser({ model, nav }: PanelProps) {
               <span className="text-base font-medium text-soft">{KIND_QUESTION[kind]}</span>
               <span className="text-sm text-muted-foreground">{detail}</span>
             </span>
-          </button>
+            <Button variant="ghost" className="absolute inset-0 h-auto rounded-xl hover:bg-transparent focus-visible:ring-0" onClick={() => nav.go({ new: kind })} aria-label={`${KIND_LABEL[kind]}: ${KIND_QUESTION[kind]}`} />
+          </Card>
         ))}
       </div>
     </Panel>
@@ -186,7 +192,6 @@ function StudyView({ data, study, nav, prepared, reload }: PanelProps & { study:
   const runs = [...study.runs].sort((a, b) => b.created_at.localeCompare(a.created_at));
   const runId = nav.run && runs.some((r) => r.id === nav.run) ? nav.run : runs[0]?.id ?? null;
   const [tab, setTab] = useState<"results" | "setup">(runs.length ? "results" : "setup");
-  const [asking, setAsking] = useState(false);
   const shown = runs.length ? tab : "setup";
 
   const remove = async () => {
@@ -211,7 +216,7 @@ function StudyView({ data, study, nav, prepared, reload }: PanelProps & { study:
           setTab("results");
           nav.go({ run: r }, true);
         }}
-        tabs={runs.length ? <Segmented label="Show" value={tab as "results" | "setup"} onChange={setTab} options={[{ id: "results", label: "Results" }, { id: "setup", label: "Setup" }]} /> : null}
+        tabs={runs.length ? <ShowTabs value={tab} onChange={setTab} /> : null}
       />
     );
 
@@ -226,42 +231,51 @@ function StudyView({ data, study, nav, prepared, reload }: PanelProps & { study:
       back={() => nav.go({ study: null, run: null })}
       testId="study-view"
       actions={
-        asking ? (
-          <span className="flex items-center gap-1.5">
-            <Button size="xs" variant="destructive" onClick={remove} data-testid="delete-study-confirm">
-              Delete
+        <Confirm
+          trigger={
+            <Button variant="ghost" size="icon-sm" aria-label="Delete this test and its runs" data-testid="delete-study">
+              <Trash2Icon />
             </Button>
-            <Button size="xs" variant="outline" onClick={() => setAsking(false)}>
-              Keep
-            </Button>
-          </span>
-        ) : (
-          <Button variant="ghost" size="icon-sm" onClick={() => setAsking(true)} aria-label="Delete this test and its runs" data-testid="delete-study">
-            <Trash2Icon />
-          </Button>
-        )
+          }
+          title={`Delete “${study.name}”?`}
+          description={`Its setup and ${runs.length === 1 ? "its run" : `all ${runs.length} runs`} go for good.`}
+          action="Delete"
+          onConfirm={remove}
+          testId="delete-study-confirm"
+        />
       }
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Segmented label="Show" value={shown} onChange={setTab} options={[{ id: "results", label: "Results" }, { id: "setup", label: "Setup" }]} testId="study-tabs" />
+        <ShowTabs value={shown} onChange={setTab} />
         {runs.length > 1 && (
-          <select
-            className="h-9 max-w-full rounded-md border border-input bg-sunken/60 px-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/40"
-            value={runId ?? ""}
-            onChange={(e) => nav.go({ run: e.target.value }, true)}
-            aria-label="Which run"
-            data-testid="run-picker"
-          >
-            {runs.map((r, i) => (
-              <option key={r.id} value={r.id}>
-                Run {runs.length - i} · {STATUS_LABEL[r.status]} · {ago(r.created_at)}
-              </option>
-            ))}
-          </select>
+          <Select value={runId ?? ""} onValueChange={(v) => nav.go({ run: v }, true)}>
+            <SelectTrigger className="w-auto max-w-full" aria-label="Which run" data-testid="run-picker">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent align="end">
+              {runs.map((r, i) => (
+                <SelectItem key={r.id} value={r.id}>
+                  Run {runs.length - i} · {STATUS_LABEL[r.status]} · {ago(r.created_at)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
       </div>
       {runId && <RunView key={runId} runId={runId} study={study} model={model} nav={nav} />}
     </Panel>
+  );
+}
+
+/** Results or Setup (shadcn Tabs as a switch; the content is the panel below) */
+function ShowTabs({ value, onChange }: { value: "results" | "setup"; onChange(v: "results" | "setup"): void }) {
+  return (
+    <Tabs value={value} onValueChange={(v) => onChange(v as "results" | "setup")} data-testid="study-tabs">
+      <TabsList>
+        <TabsTrigger value="results">Results</TabsTrigger>
+        <TabsTrigger value="setup">Setup</TabsTrigger>
+      </TabsList>
+    </Tabs>
   );
 }
 
@@ -274,9 +288,11 @@ function RunView({ runId, study, model, nav }: { runId: string; study: Study; mo
   if (run.status === "failed" || run.status === "stopped")
     return (
       <div className="flex flex-col gap-3">
-        <div className={cn("rounded-xl p-4 text-sm", run.status === "failed" ? "bg-clay/10 text-clay-text" : "bg-sunken text-soft")} role={run.status === "failed" ? "alert" : undefined}>
-          <span className="font-semibold">{run.status === "failed" ? "This run did not finish." : "You stopped this run."}</span> {run.error ?? run.message}
-        </div>
+        <Alert tone={run.status === "failed" ? "clay" : "neutral"}>
+          <span>
+            <span className="font-semibold">{run.status === "failed" ? "This run did not finish." : "You stopped this run."}</span> {run.error ?? run.message}
+          </span>
+        </Alert>
         <Badge tone={STATUS_TONE[run.status]}>{STATUS_LABEL[run.status]}</Badge>
       </div>
     );

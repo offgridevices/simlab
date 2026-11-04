@@ -6,7 +6,7 @@
 // Frames are drawn on demand: nothing renders while nothing moves.
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { lut, type ColorScale } from "../lib/colormaps";
+import { lut, paletteStamp, type ColorScale } from "../lib/colormaps";
 import type { Slice, Vec3 } from "../lib/types";
 import type { Prepared } from "./prepare";
 
@@ -47,14 +47,37 @@ export interface SpinShow {
 
 const reduceMotion = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+/** a CSS colour (from the tokens) as a three.js colour; mid grey if it cannot be read */
 function color(css: string): THREE.Color {
-  const c = new THREE.Color();
+  const c = new THREE.Color().setRGB(0.6, 0.6, 0.6, THREE.SRGBColorSpace);
+  if (!css) return c;
   try {
-    c.setStyle(css || "#999", THREE.SRGBColorSpace);
+    c.setStyle(css, THREE.SRGBColorSpace);
   } catch {
-    c.set("#999999");
+    /* keep the grey */
   }
   return c;
+}
+
+/** a design token's value now */
+function tok(name: string): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+const tokNum = (name: string, fallback: number) => {
+  const v = parseFloat(tok(name));
+  return Number.isFinite(v) ? v : fallback;
+};
+
+/** a round grid step (1, 2 or 5 × 10ⁿ mm) giving about `cells` squares across `span` */
+export function gridStep(span: number, cells = 12): number {
+  const raw = span / cells;
+  const p = 10 ** Math.floor(Math.log10(raw || 1));
+  return [1, 2, 5, 10].map((m) => m * p).find((x) => x >= raw) ?? 10 * p;
+}
+
+export interface ProbeHit {
+  value: number;
+  pos: Vec3;
 }
 
 export class SceneView {
@@ -62,22 +85,23 @@ export class SceneView {
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(35, 1, 0.1, 10000);
   private controls: OrbitControls;
-  private hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.4);
-  private sun = new THREE.DirectionalLight(0xffffff, 1.6);
-  private fill = new THREE.DirectionalLight(0xffffff, 0.5);
+  private hemi = new THREE.HemisphereLight();
+  private sun = new THREE.DirectionalLight();
+  private fill = new THREE.DirectionalLight();
   private material: THREE.MeshStandardMaterial;
   private uniforms = {
     uPatchTex: { value: null as THREE.DataTexture | null },
     uPatchW: { value: 1 },
     uPatchH: { value: 1 },
     uHover: { value: -1 },
-    uHoverColor: { value: new THREE.Color(0xff6a00) },
+    uHoverColor: { value: new THREE.Color() },
     uLut: { value: null as THREE.DataTexture | null },
     uMin: { value: 0 },
     uMax: { value: 1 },
     uLog: { value: 0 },
-    uNan: { value: new THREE.Color(0x777777) },
+    uNan: { value: new THREE.Color() },
     uDeform: { value: 0 },
+    uRCol: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
   };
   private mesh: THREE.Mesh | null = null;
   private geometry: THREE.BufferGeometry | null = null;
@@ -101,23 +125,40 @@ export class SceneView {
   private hoverId = -1;
   private patchCount = 0;
   private patchData: Uint8Array | null = null;
-  private critical: THREE.Vector3 | null = null;
+  private grid = new THREE.Group();
+  private gridMats: THREE.LineBasicMaterial[] = [];
+  private probeScene = new THREE.Scene();
+  private probeMat: THREE.ShaderMaterial;
+  private probeTarget: THREE.WebGLRenderTarget | null = null;
+  private probeBuf = new Float32Array(4);
+  /** reading values under the pointer needs float render targets (every Mac has them) */
+  readonly canProbe: boolean;
   pickable = false;
   hoverable = false;
+  /** clicking reports the 3D point under the pointer (the brush) */
+  pointing = false;
+  onPoint: (p: Vec3) => void = () => {};
+  /** hovering reads the result's value (when a field is shown) instead of picking faces */
+  probing = false;
   onHover: (id: number | null) => void = () => {};
   onPick: (id: number) => void = () => {};
+  onProbe: (hit: (ProbeHit & { x: number; y: number }) | null) => void = () => {};
+  onProbePin: (hit: ProbeHit) => void = () => {};
+  /** the ground grid's square size, mm (0 = no grid) */
+  onGrid: (stepMm: number) => void = () => {};
   onFrame: (camera: THREE.Camera) => void = () => {};
   stats = { frames: 0, renderMs: 0, triangles: 0, picks: 0, pickMs: 0 };
 
   constructor(
     private host: HTMLElement,
-    private marker: HTMLElement | null,
+    /** elements with data-anchor="x,y,z" are kept over that point of the part */
+    private anchors: HTMLElement | null,
   ) {
     const coarse = matchMedia("(pointer: coarse)").matches;
     this.renderer = new THREE.WebGLRenderer({ antialias: !coarse, powerPreference: "high-performance", alpha: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, coarse ? 1.5 : 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.setClearColor(new THREE.Color(), 0);
     const el = this.renderer.domElement;
     el.className = "absolute inset-0 size-full outline-none";
     el.setAttribute("data-testid", "viewer-canvas");
@@ -133,14 +174,14 @@ export class SceneView {
       this.tween = null;
     });
 
-    this.scene.add(this.hemi, this.overlays, this.slices);
+    this.scene.add(this.hemi, this.grid, this.overlays, this.slices);
     // the lights move with the camera, so the side you look at is always lit
     this.camera.add(this.sun, this.fill);
     this.sun.position.set(0.6, 1, 1.4);
     this.fill.position.set(-1, -0.4, 0.4);
     this.scene.add(this.camera);
 
-    this.material = new THREE.MeshStandardMaterial({ color: 0xb9b0a0, roughness: 0.62, metalness: 0.05, side: THREE.DoubleSide });
+    this.material = new THREE.MeshStandardMaterial({ roughness: 0.62, metalness: 0.05, side: THREE.DoubleSide });
     this.material.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
       shader.vertexShader = shader.vertexShader
@@ -155,6 +196,9 @@ export class SceneView {
           #endif
           #ifdef USE_DISP
             attribute vec3 disp; uniform float uDeform;
+          #endif
+          #ifdef USE_RMARK
+            attribute float rmark; varying float vR;
           #endif`,
         )
         .replace(
@@ -168,6 +212,9 @@ export class SceneView {
           #endif
           #ifdef USE_DISP
             transformed += disp * uDeform;
+          #endif
+          #ifdef USE_RMARK
+            vR = rmark;
           #endif`,
         );
       shader.fragmentShader = shader.fragmentShader
@@ -179,6 +226,9 @@ export class SceneView {
           #endif
           #ifdef USE_FIELD
             varying float vF; uniform sampler2D uLut; uniform float uMin; uniform float uMax; uniform float uLog; uniform vec3 uNan;
+          #endif
+          #ifdef USE_RMARK
+            varying float vR; uniform vec4 uRCol[8];
           #endif`,
         )
         .replace(
@@ -196,6 +246,15 @@ export class SceneView {
             vec4 st = texture2D(uPatchTex, vec2((mod(pid, uPatchW) + 0.5) / uPatchW, (floor(pid / uPatchW) + 0.5) / uPatchH));
             base = mix(base, st.rgb, st.a);
             if (abs(pid - uHover) < 0.5) base = mix(base, uHoverColor, 0.5);
+          #endif
+          #ifdef USE_RMARK
+            // areas picked by shape; a soft edge where a triangle is only partly in
+            if (vR > 0.05) {
+              int k = int(mod(floor(vR + 0.5) - 1.0, 8.0));
+              vec4 rc = uRCol[0];
+              for (int i = 1; i < 8; i++) if (i == k) rc = uRCol[i];
+              base = mix(base, rc.rgb, rc.a * clamp(vR / max(floor(vR + 0.5), 1.0), 0.0, 1.0));
+            }
           #endif
           vec4 diffuseColor = vec4( base, opacity );`,
         );
@@ -226,6 +285,33 @@ export class SceneView {
         }`,
     });
 
+    this.probeMat = new THREE.ShaderMaterial({
+      side: THREE.DoubleSide,
+      uniforms: { uDeform: this.uniforms.uDeform, uMode: { value: 0 } },
+      vertexShader: `
+        attribute float fval; varying float vF; varying vec3 vW;
+        #ifdef USE_DISP
+          attribute vec3 disp; uniform float uDeform;
+        #endif
+        void main() {
+          vF = fval;
+          vec3 p = position;
+          #ifdef USE_DISP
+            p += disp * uDeform;
+          #endif
+          vec4 w = modelMatrix * vec4(p, 1.0);
+          vW = w.xyz;
+          gl_Position = projectionMatrix * viewMatrix * w;
+        }`,
+      fragmentShader: `
+        uniform float uMode; varying float vF; varying vec3 vW;
+        void main() {
+          gl_FragColor = uMode < 0.5 ? vec4(vF, 1.0, 0.0, 1.0) : vec4(vW, 1.0);
+        }`,
+    });
+    this.canProbe = this.renderer.capabilities.isWebGL2 && this.renderer.extensions.has("EXT_color_buffer_float");
+    if (this.canProbe) this.probeTarget = new THREE.WebGLRenderTarget(1, 1, { type: THREE.FloatType, format: THREE.RGBAFormat });
+
     this.ro = new ResizeObserver(() => this.resize());
     this.ro.observe(host);
     el.addEventListener("pointerdown", this.pDown);
@@ -254,18 +340,23 @@ export class SceneView {
     if (this.hoverQueued) {
       const { x, y } = this.hoverQueued;
       this.hoverQueued = null;
-      const id = this.pick(x, y);
-      if (id !== this.hoverId) {
-        this.hoverId = id;
-        this.uniforms.uHover.value = id;
-        this.onHover(id >= 0 ? id : null);
+      if (this.probing) {
+        const hit = this.probe(x, y);
+        this.onProbe(hit ? { ...hit, x, y } : null);
+      } else {
+        const id = this.pick(x, y);
+        if (id !== this.hoverId) {
+          this.hoverId = id;
+          this.uniforms.uHover.value = id;
+          this.onHover(id >= 0 ? id : null);
+        }
       }
     }
     const t = performance.now();
     this.renderer.render(this.scene, this.camera);
     this.stats.frames++;
     this.stats.renderMs += performance.now() - t;
-    this.placeMarker();
+    this.placeAnchors();
     this.onFrame(this.camera);
     if (moving || this.tween) this.request();
   };
@@ -287,6 +378,7 @@ export class SceneView {
     if (this.mesh) {
       this.scene.remove(this.mesh);
       this.pickScene.clear();
+      this.probeScene.clear();
       this.geometry?.dispose();
       this.mesh = null;
       this.geometry = null;
@@ -307,6 +399,7 @@ export class SceneView {
     this.setDefine("USE_PATCH", !!p.vertexPatch);
     this.setDefine("USE_FIELD", false);
     this.setDefine("USE_DISP", false);
+    this.setDefine("USE_RMARK", false);
     this.mesh = new THREE.Mesh(g, this.material);
     this.mesh.matrixAutoUpdate = false;
     this.scene.add(this.mesh);
@@ -318,6 +411,9 @@ export class SceneView {
       for (let i = 0; i < p.vertexPatch.length; i++) if (p.vertexPatch[i]! > max) max = p.vertexPatch[i]!;
       this.allocPatches(max + 1);
     }
+    const pm2 = new THREE.Mesh(g, this.probeMat);
+    pm2.matrixAutoUpdate = false;
+    this.probeScene.add(pm2);
     this.stats.triangles = p.triangles;
     const s = g.boundingSphere!;
     this.center.copy(s.center);
@@ -327,6 +423,8 @@ export class SceneView {
     this.camera.updateProjectionMatrix();
     this.controls.minDistance = this.radius * 0.05;
     this.controls.maxDistance = this.radius * 40;
+    g.computeBoundingBox();
+    this.buildGrid(g.boundingBox!);
     if (!this.touched) this.fit(false);
     this.request();
   }
@@ -341,12 +439,14 @@ export class SceneView {
     if (on) d[name] = "";
     else delete d[name];
     if (was !== on) this.material.needsUpdate = true;
-    const pd = (this.pickMat.defines ??= {});
-    if (name === "USE_DISP") {
-      if (on) pd[name] = "";
-      else delete pd[name];
-      if (was !== on) this.pickMat.needsUpdate = true;
-    }
+    if (name === "USE_DISP")
+      for (const m of [this.pickMat, this.probeMat]) {
+        const pd = (m.defines ??= {});
+        const had = name in pd;
+        if (on) pd[name] = "";
+        else delete pd[name];
+        if (had !== on) m.needsUpdate = true;
+      }
   }
 
   private allocPatches(n: number) {
@@ -386,18 +486,62 @@ export class SceneView {
     this.request();
   }
 
-  setPartColor(css: string, hover: string) {
-    this.material.color.copy(color(css));
-    this.uniforms.uHoverColor.value.copy(color(hover));
+  /** read every colour the 3D view uses from the design tokens (call again when the theme changes) */
+  applyTheme() {
+    this.material.color.copy(color(tok("--part")));
+    this.uniforms.uHoverColor.value.copy(color(tok("--part-hover")));
+    this.uniforms.uNan.value.copy(color(tok("--nan")));
+    this.hemi.color.copy(color(tok("--viewer-light-sky")));
+    this.hemi.groundColor.copy(color(tok("--viewer-light-ground")));
+    this.hemi.intensity = tokNum("--viewer-light-sky-intensity", 1.3);
+    this.sun.color.copy(color(tok("--viewer-light-key")));
+    this.sun.intensity = tokNum("--viewer-light-key-intensity", 1.5);
+    this.fill.color.copy(color(tok("--viewer-light-key")));
+    this.fill.intensity = 0.45;
+    const op = tokNum("--viewer-grid-opacity", 0.6);
+    const [minor, major] = this.gridMats;
+    if (minor && major) {
+      minor.color.copy(color(tok("--viewer-grid")));
+      major.color.copy(color(tok("--viewer-grid-major")));
+      minor.opacity = op * 0.6;
+      major.opacity = op;
+    }
     this.request();
   }
 
-  setLights(dark: boolean) {
-    this.hemi.color.set(dark ? 0xf1ece0 : 0xffffff);
-    this.hemi.groundColor.set(dark ? 0x2a241d : 0x8a8478);
-    this.hemi.intensity = dark ? 1.25 : 1.5;
-    this.sun.intensity = dark ? 1.6 : 1.4;
-    this.request();
+  /** a ground grid under the part, in round millimetre squares, every fifth line stronger */
+  private buildGrid(box: THREE.Box3) {
+    for (const c of [...this.grid.children]) {
+      this.grid.remove(c);
+      (c as THREE.LineSegments).geometry.dispose();
+    }
+    for (const m of this.gridMats) m.dispose();
+    const size = box.getSize(new THREE.Vector3());
+    const span = Math.max(size.x, size.y) * 1.5 || 10;
+    const step = gridStep(span, 24);
+    const half = Math.ceil(span / 2 / step) * step;
+    const cx = Math.round((box.min.x + box.max.x) / 2 / step) * step;
+    const cy = Math.round((box.min.y + box.max.y) / 2 / step) * step;
+    const z = box.min.z - Math.max(size.z, span) * 0.002;
+    const minor: number[] = [];
+    const major: number[] = [];
+    const n = Math.round(half / step);
+    for (let i = -n; i <= n; i++) {
+      const list = i % 5 === 0 ? major : minor;
+      const v = i * step;
+      list.push(cx + v, cy - half, z, cx + v, cy + half, z);
+      list.push(cx - half, cy + v, z, cx + half, cy + v, z);
+    }
+    this.gridMats = [minor, major].map(() => new THREE.LineBasicMaterial({ transparent: true, depthWrite: false }));
+    [minor, major].forEach((pts, k) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+      const l = new THREE.LineSegments(g, this.gridMats[k]);
+      l.renderOrder = -1;
+      this.grid.add(l);
+    });
+    this.applyTheme();
+    this.onGrid(step);
   }
 
   /** colour the part by a field: values per vertex of the prepared mesh, or null for the plain part */
@@ -412,13 +556,15 @@ export class SceneView {
     }
     this.fillAttr("fval", values, 1);
     const old = this.uniforms.uLut.value;
-    if (!old || old.userData.map !== scale.map) {
+    // the safety scale is made of theme colours: a new theme means a new table
+    const key = `${scale.map}:${paletteStamp()}`;
+    if (!old || old.userData.key !== key) {
       old?.dispose();
       const tex = new THREE.DataTexture(lut(scale.map, 256), 256, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.magFilter = THREE.LinearFilter;
       tex.minFilter = THREE.LinearFilter;
-      tex.userData.map = scale.map;
+      tex.userData.key = key;
       tex.needsUpdate = true;
       this.uniforms.uLut.value = tex;
     }
@@ -447,7 +593,7 @@ export class SceneView {
    * it when it exists. Replacing the attribute instead would leave the old GPU
    * buffer behind (three.js frees only what is attached when the geometry goes).
    */
-  private fillAttr(name: "fval" | "disp", values: Float32Array, size: number) {
+  private fillAttr(name: "fval" | "disp" | "rmark", values: Float32Array, size: number) {
     const g = this.geometry!;
     const cur = g.getAttribute(name) as THREE.BufferAttribute | undefined;
     if (cur?.array === values) return;
@@ -561,20 +707,19 @@ export class SceneView {
     this.request();
   }
 
-  setCritical(p: Vec3 | null) {
-    this.critical = p ? new THREE.Vector3(...p) : null;
-    if (this.marker) this.marker.style.display = p ? "" : "none";
-    this.request();
-  }
-
-  private placeMarker() {
-    const m = this.marker;
-    if (!m || !this.critical) return;
-    const v = this.critical.clone().project(this.camera);
+  /** keep every [data-anchor="x,y,z"] element over its point (the weakest spot, pinned values) */
+  private placeAnchors() {
+    const box = this.anchors;
+    if (!box) return;
     const r = this.renderer.domElement.getBoundingClientRect();
-    const hidden = v.z > 1 || v.z < -1;
-    m.style.visibility = hidden ? "hidden" : "visible";
-    m.style.transform = `translate(${((v.x + 1) / 2) * r.width}px, ${((1 - v.y) / 2) * r.height}px)`;
+    const v = new THREE.Vector3();
+    for (const el of box.querySelectorAll<HTMLElement>("[data-anchor]")) {
+      const [x, y, z] = (el.dataset.anchor ?? "").split(",").map(Number);
+      if (![x, y, z].every(Number.isFinite)) continue;
+      v.set(x!, y!, z!).project(this.camera);
+      el.style.visibility = v.z > 1 || v.z < -1 ? "hidden" : "visible";
+      el.style.transform = `translate(${((v.x + 1) / 2) * r.width}px, ${((1 - v.y) / 2) * r.height}px)`;
+    }
   }
 
   // ------------------------------------------------------------ camera
@@ -656,7 +801,7 @@ export class SceneView {
     this.camera.setViewOffset(w, h, x, y, 1, 1);
     const prevTarget = this.renderer.getRenderTarget();
     this.renderer.setRenderTarget(this.pickTarget);
-    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.setClearColor(new THREE.Color(), 0);
     this.renderer.clear();
     this.renderer.render(this.pickScene, this.camera);
     this.renderer.readRenderTargetPixels(this.pickTarget, 0, 0, 1, 1, this.pickBuf);
@@ -668,6 +813,71 @@ export class SceneView {
     return b[0]! + b[1]! * 256 + b[2]! * 65536 - 1;
   }
 
+  /** the result's value and the 3D point under a pixel, or null off the part */
+  probe(x: number, y: number): ProbeHit | null {
+    const t = this.probeTarget;
+    if (!t || !this.mesh || !this.geometry?.getAttribute("fval")) return null;
+    const el = this.renderer.domElement;
+    this.camera.setViewOffset(el.clientWidth, el.clientHeight, x, y, 1, 1);
+    const prev = this.renderer.getRenderTarget();
+    const read = (mode: number) => {
+      this.probeMat.uniforms.uMode!.value = mode;
+      this.renderer.setRenderTarget(t);
+      this.renderer.setClearColor(new THREE.Color(), 0);
+      this.renderer.clear();
+      this.renderer.render(this.probeScene, this.camera);
+      this.renderer.readRenderTargetPixels(t, 0, 0, 1, 1, this.probeBuf);
+      return Array.from(this.probeBuf);
+    };
+    const [value, hit] = read(0);
+    const pos = hit === 1 ? read(1) : null;
+    this.renderer.setRenderTarget(prev);
+    this.camera.clearViewOffset();
+    if (!pos || value === undefined) return null;
+    return { value, pos: [pos[0]!, pos[1]!, pos[2]!] };
+  }
+
+  /** the 3D point (mm) on the part under a pixel, or null */
+  pointAt(x: number, y: number): Vec3 | null {
+    const t = this.probeTarget;
+    if (!t || !this.mesh) return null;
+    const el = this.renderer.domElement;
+    this.camera.setViewOffset(el.clientWidth, el.clientHeight, x, y, 1, 1);
+    const prev = this.renderer.getRenderTarget();
+    this.probeMat.uniforms.uMode!.value = 1;
+    this.renderer.setRenderTarget(t);
+    this.renderer.setClearColor(new THREE.Color(), 0);
+    this.renderer.clear();
+    this.renderer.render(this.probeScene, this.camera);
+    this.renderer.readRenderTargetPixels(t, 0, 0, 1, 1, this.probeBuf);
+    this.renderer.setRenderTarget(prev);
+    this.camera.clearViewOffset();
+    const b = this.probeBuf;
+    return b[3] === 1 ? [b[0]!, b[1]!, b[2]!] : null;
+  }
+
+  /** colour the surface covered by areas picked by shape (triangle centre inside the shape) */
+  setRegions(list: { mask: Float32Array | null; colors: { color: string; alpha: number }[] }) {
+    const g = this.geometry;
+    if (!g) return;
+    if (!list.mask) {
+      this.setDefine("USE_RMARK", false);
+      this.request();
+      return;
+    }
+    this.fillAttr("rmark", list.mask, 1);
+    list.colors.slice(0, 8).forEach((c, i) => {
+      const col = color(c.color);
+      this.uniforms.uRCol.value[i]!.set(col.r, col.g, col.b, c.alpha);
+    });
+    this.setDefine("USE_RMARK", true);
+    this.request();
+  }
+
+  get surface() {
+    return this.prepared;
+  }
+
   private local(e: PointerEvent) {
     const r = this.renderer.domElement.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -676,22 +886,34 @@ export class SceneView {
     this.down = this.local(e);
   };
   private pMove = (e: PointerEvent) => {
-    if (!(this.pickable || this.hoverable) || e.buttons || e.pointerType === "touch") return;
+    if (!(this.pickable || this.hoverable || this.probing) || this.pointing || e.buttons || e.pointerType === "touch") return;
     this.hoverQueued = this.local(e);
     this.request();
   };
   private pUp = (e: PointerEvent) => {
     const d = this.down;
     this.down = null;
-    if (!d || !this.pickable) return;
+    if (!d) return;
     const p = this.local(e);
     if (Math.hypot(p.x - d.x, p.y - d.y) > 5) return;
+    if (this.pointing) {
+      const at = this.pointAt(p.x, p.y);
+      if (at) this.onPoint(at);
+      return;
+    }
+    if (this.probing) {
+      const hit = this.probe(p.x, p.y);
+      if (hit) this.onProbePin(hit);
+      return;
+    }
+    if (!this.pickable) return;
     const id = this.pick(p.x, p.y);
     if (id >= 0) this.onPick(id);
     this.request();
   };
   private pLeave = () => {
     this.hoverQueued = null;
+    if (this.probing) this.onProbe(null);
     if (this.hoverId !== -1) {
       this.hoverId = -1;
       this.uniforms.uHover.value = -1;
@@ -721,6 +943,9 @@ export class SceneView {
     this.material.dispose();
     this.pickMat.dispose();
     this.pickTarget.dispose();
+    this.probeMat.dispose();
+    this.probeTarget?.dispose();
+    for (const m of this.gridMats) m.dispose();
     this.uniforms.uPatchTex.value?.dispose();
     this.uniforms.uLut.value?.dispose();
     this.renderer.dispose();
