@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="SimLab by OffGrid. Test 3D-printed drone parts on your own Mac: strength, air flow and propeller push." />
+    <meta name="theme-color" content="#14110d" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f7f4ec" media="(prefers-color-scheme: light)" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>SimLab</title>
+    <script>
+      // Set the theme before first paint so there is no flash. "auto" follows the device.
+      (function () {
+        try {
+          var t = localStorage.getItem("sl_theme");
+          if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

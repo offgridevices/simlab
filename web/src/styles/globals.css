@@ -1,0 +1,235 @@
+/* SimLab's look, copied from HardHub ("Workbench"): the OffGrid palette,
+   warm and colourful, on shadcn/ui components. Dark is the default; a device that
+   prefers light gets light; <html data-theme="light|dark"> always wins.
+   Components use the semantic tokens; the named colours (ember, moss, sky,
+   gold, plum, clay) carry status: moss safe, gold marginal, clay breaks,
+   sky air and flow. */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+:root {
+  --radius: 0.625rem;
+
+  --background: #14110d;
+  --foreground: #f1ece0;
+  --card: #1d1915;
+  --card-foreground: #f1ece0;
+  --popover: #1d1915;
+  --popover-foreground: #f1ece0;
+  --primary: #ff6a00;
+  --primary-foreground: #1b1813;
+  --secondary: #2a241d;
+  --secondary-foreground: #f1ece0;
+  --muted: #2a241d;
+  --muted-foreground: #a89e8e;
+  --accent: #2a241d;
+  --accent-foreground: #f1ece0;
+  --destructive: #f07a5a;
+  --border: rgba(241, 236, 224, 0.09);
+  --input: rgba(241, 236, 224, 0.15);
+  --ring: #ff8a3d;
+  --sunken: #100d0a;
+  --soft: #cfc5b3;
+
+  /* named colours: a fill and the text that reads on its 14% tint */
+  --ember: #ff6a00;
+  --ember-text: #ff9a52;
+  --moss: #8cc084;
+  --moss-text: #a8d39f;
+  --sky: #6fa8e8;
+  --sky-text: #9cc4f0;
+  --gold: #f0b84a;
+  --gold-text: #f3c76e;
+  --plum: #c39bd3;
+  --plum-text: #d4b5e0;
+  --clay: #f07a5a;
+  --clay-text: #f7a088;
+
+  /* the 3D viewer: a soft spotlight behind the part, and the part itself */
+  --viewer-a: #2a241d;
+  --viewer-b: #100d0a;
+  --part: #b9b0a0;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --background: #f7f4ec;
+    --foreground: #1b1813;
+    --card: #fffdf8;
+    --card-foreground: #1b1813;
+    --popover: #fffdf8;
+    --popover-foreground: #1b1813;
+    --primary: #ff6a00;
+    --primary-foreground: #1b1813;
+    --secondary: #efe9dc;
+    --secondary-foreground: #1b1813;
+    --muted: #efe9dc;
+    --muted-foreground: #6b6456;
+    --accent: #efe9dc;
+    --accent-foreground: #1b1813;
+    --destructive: #b3401f;
+    --border: #e6dfd0;
+    --input: #d9cfbc;
+    --ring: #b34a00;
+    --sunken: #efeae0;
+    --soft: #4d473d;
+    --ember-text: #a84300;
+    --moss-text: #3f6b37;
+    --sky-text: #2b5487;
+    --gold-text: #7a5410;
+    --plum-text: #66406f;
+    --clay-text: #a8381a;
+    --viewer-a: #fffdf8;
+    --viewer-b: #e9e3d6;
+    --part: #8f877a;
+    color-scheme: light;
+  }
+}
+:root[data-theme="light"] {
+  --background: #f7f4ec;
+  --foreground: #1b1813;
+  --card: #fffdf8;
+  --card-foreground: #1b1813;
+  --popover: #fffdf8;
+  --popover-foreground: #1b1813;
+  --primary: #ff6a00;
+  --primary-foreground: #1b1813;
+  --secondary: #efe9dc;
+  --secondary-foreground: #1b1813;
+  --muted: #efe9dc;
+  --muted-foreground: #6b6456;
+  --accent: #efe9dc;
+  --accent-foreground: #1b1813;
+  --destructive: #b3401f;
+  --border: #e6dfd0;
+  --input: #d9cfbc;
+  --ring: #b34a00;
+  --sunken: #efeae0;
+  --soft: #4d473d;
+  --ember-text: #a84300;
+  --moss-text: #3f6b37;
+  --sky-text: #2b5487;
+  --gold-text: #7a5410;
+  --plum-text: #66406f;
+  --clay-text: #a8381a;
+  --viewer-a: #fffdf8;
+  --viewer-b: #e9e3d6;
+  --part: #8f877a;
+  color-scheme: light;
+}
+
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sunken: var(--sunken);
+  --color-soft: var(--soft);
+  --color-ember: var(--ember);
+  --color-ember-text: var(--ember-text);
+  --color-moss: var(--moss);
+  --color-moss-text: var(--moss-text);
+  --color-sky: var(--sky);
+  --color-sky-text: var(--sky-text);
+  --color-gold: var(--gold);
+  --color-gold-text: var(--gold-text);
+  --color-plum: var(--plum);
+  --color-plum-text: var(--plum-text);
+  --color-clay: var(--clay);
+  --color-clay-text: var(--clay-text);
+  --color-viewer: var(--viewer-b);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+  ::selection {
+    background: var(--ember);
+    color: #1b1813;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@utility num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* a thin bar that moves while something loads */
+@keyframes hh-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(250%); }
+}
+@keyframes hh-blink {
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* "Where it breaks": a ring that breathes out from the spot a test found */
+@keyframes hh-pulse {
+  from { transform: scale(0.55); opacity: 0.95; }
+  to { transform: scale(1.6); opacity: 0; }
+}
+.hh-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: hh-pulse 1.6s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+
+/* number inputs without the spinner arrows (they crowd a narrow panel) */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
