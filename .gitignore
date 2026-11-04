@@ -1,0 +1,14 @@
+target/
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+/app/src-tauri/gen/
+/app/src-tauri/target/
+*.log
+.simlab-dev/
+/app/src-tauri/binaries/
+/app/src-tauri/icons/*
+!/app/src-tauri/icons/source.png
