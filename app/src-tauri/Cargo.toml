@@ -1,0 +1,18 @@
+[package]
+name = "simlab-app"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+
+# its own workspace: the engine builds without Tauri's dependencies
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.4", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.5", features = [] }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"

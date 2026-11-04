@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SimLab",
+  "version": "0.1.0",
+  "identifier": "com.offgridevices.simlab",
+  "build": {
+    "frontendDist": "../splash"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    },
+    "macOSPrivateApi": false
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "category": "DeveloperTool",
+    "shortDescription": "Test 3D-printed drone parts on your Mac",
+    "copyright": "OffGrid Devices · AGPL-3.0-or-later",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns"],
+    "externalBin": ["binaries/simlab-engine"],
+    "resources": {
+      "../../mesher/simlab_mesher.py": "mesher/simlab_mesher.py",
+      "../../mesher/pyproject.toml": "mesher/pyproject.toml",
+      "../../mesher/uv.lock": "mesher/uv.lock",
+      "../../mesher/.python-version": "mesher/.python-version",
+      "../../web/dist/": "web/",
+      "../../docker/": "docker/"
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": "-"
+    }
+  }
+}
