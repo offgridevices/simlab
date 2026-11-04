@@ -1,0 +1,16 @@
+Verbatim copies of files from the UIUC Propeller Data Site, Volume 2
+(compiled by R. W. Deters, UIUC, version 1, 5/27/15), downloaded 2026-11-04:
+  https://m-selig.ae.illinois.edu/props/volume-2/propDB-volume-2.html
+  each file: https://m-selig.ae.illinois.edu/props/volume-2/data/<file name>
+
+Reference: Deters, R. W., Ananda, G. K., and Selig, M. S., "Reynolds Number
+Effects on the Performance of Small-Scale Propellers", AIAA Paper 2014-2151,
+32nd AIAA Applied Aerodynamics Conference, Atlanta, 2014.
+
+*_geom.txt     r/R, c/R, beta (deg)  (PropellerScanner digitisation;
+               da4002_geom.txt is the DA4002 design geometry)
+*_static_*.txt RPM, CT, CP            (V = 0)
+*_<rpm>.txt    J, CT, CP, eta         (advancing flow at that RPM)
+CT = T/(rho n^2 D^4), CP = P/(rho n^3 D^5), D = true diameter (Deters 2014, Tables 1-2).
+
+../sda1075.dat: SDA1075 airfoil coordinates, Deters et al. 2014, Appendix A, Table 4.
