@@ -1,0 +1,663 @@
+[
+ {
+  "id": "fdm-pla",
+  "name": "PLA (Bambu Lab PLA Basic)",
+  "process": "fdm",
+  "density": 1240,
+  "e_xy_mpa": 2680,
+  "e_z_mpa": 2160,
+  "nu": 0.36,
+  "uts_xy_mpa": 39,
+  "uts_z_mpa": 29.25,
+  "uts_z_measured_mpa": 35,
+  "z_knockdown": 0.75,
+  "elongation_pct": 12.2,
+  "hdt_c": 57,
+  "flex_strength_mpa": 76,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. Bambu's Z ratio (0.90) is unusually high; peer-reviewed work (Shaffer et al. 2014, Polymer 55, cited in Duty et al. SFF 2018) found PLA Z strength 45% below X, so the recommended design knockdown is 0.75, not the coupon ratio. Brittle; creeps above ~50 C. z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.9) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 29.2 MPa (0.75 \u00d7 along-layer), below the maker test bar value of 35 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://cdn.shopify.com/s/files/1/0380/5149/files/Bambu_PLA_Basic_Technical_Data_Sheet.pdf",
+   "https://media-gallery.unh.edu/media_file_download/1083",
+   "https://utw10945.utweb.utexas.edu/sites/default/files/2018/198%20ZPinningApproachforReducingMechanicalAnisotr.pdf"
+  ],
+  "estimated_fields": [
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-pla-tough",
+  "name": "PLA+ / Tough PLA (Bambu Lab PLA Tough)",
+  "process": "fdm",
+  "density": 1260,
+  "e_xy_mpa": 2330,
+  "e_z_mpa": 2110,
+  "nu": 0.36,
+  "uts_xy_mpa": 44,
+  "uts_z_mpa": 33.0,
+  "uts_z_measured_mpa": 39,
+  "z_knockdown": 0.75,
+  "elongation_pct": 8.2,
+  "hdt_c": 55,
+  "flex_strength_mpa": 92,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. Coupon Z ratio 0.89; design knockdown 0.75 for the same reason as PLA. 'PLA+' from other brands varies widely (some are impact-modified with lower modulus). z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.89) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 33.0 MPa (0.75 \u00d7 along-layer), below the maker test bar value of 39 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://cdn.shopify.com/s/files/1/0380/5149/files/Bambu_PLA_Tough_Technical_Data_Sheet.pdf",
+   "https://utw10945.utweb.utexas.edu/sites/default/files/2018/198%20ZPinningApproachforReducingMechanicalAnisotr.pdf"
+  ],
+  "estimated_fields": [
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-petg",
+  "name": "PETG (Polymaker PolyLite PETG; Z strength from Bambu PETG HF)",
+  "process": "fdm",
+  "density": 1250,
+  "e_xy_mpa": 2117,
+  "e_z_mpa": 1899,
+  "nu": 0.38,
+  "uts_xy_mpa": 50.8,
+  "uts_z_mpa": 22.86,
+  "uts_z_measured_mpa": 23,
+  "z_knockdown": 0.45,
+  "elongation_pct": 8.4,
+  "hdt_c": 78,
+  "flex_strength_mpa": 69.6,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. Z strength data disagree a lot: Polymaker V5.4 reports 42.8 MPa (ratio 0.84), its older V5.2 sheet 13.4 MPa, Bambu PETG HF 23 MPa (ratio 0.68 vs its own 34 MPa XY), Prusament 'interlayer adhesion' 18 MPa vs 47 MPa XY. The conservative Bambu Z value (23 MPa) is used here; Prusament PETG XY: 47 MPa yield, 1.5 GPa modulus, HDT 68 C. z_knockdown is a recommended design factor on XY strength (estimated): set from the spread of measured Z/XY ratios (0.38-0.84 across three makers; 0.45 for the values used here), since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 22.9 MPa (0.45 \u00d7 along-layer), below the maker test bar value of 23 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://wiki.polymaker.com/polymaker-products/more-about-our-products/documents/technical-data-sheets/petg-pet/polylite-tm-petg",
+   "https://botland.com.pl/img/art/inne/25540_karta_produktu.pdf",
+   "https://storage.googleapis.com/prusa3d-content-prod-14e8-wordpress-prusament-prod/2023/10/9f8d2165-tds_prusament-petg_n_en.pdf"
+  ],
+  "estimated_fields": [
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-abs",
+  "name": "ABS (Bambu Lab ABS; modulus from Polymaker PolyLite ABS)",
+  "process": "fdm",
+  "density": 1050,
+  "e_xy_mpa": 2247,
+  "e_z_mpa": 2081,
+  "nu": 0.37,
+  "uts_xy_mpa": 41,
+  "uts_z_mpa": 24.6,
+  "uts_z_measured_mpa": 32,
+  "z_knockdown": 0.6,
+  "elongation_pct": 10.5,
+  "hdt_c": 87,
+  "flex_strength_mpa": 68,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. Bambu's sheet lists Young's modulus 3800 MPa (XY) / 2960 MPa (Z), which conflicts with its own 1880 MPa bending modulus and with typical ABS, so Polymaker's 2247/2081 MPa is used. Polymaker strength: 33.4 XY / 29.7 Z MPa, HDT 100 C @0.45 MPa. ABS is the most layer-sensitive common filament: Shaffer et al. (cited in Duty et al. 2018) found Z >85% weaker on an early printer; enclosed, warm printing narrows this. Poisson's ratio 0.36-0.38 measured by Cantrell et al. with DIC. z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.78) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 24.6 MPa (0.6 \u00d7 along-layer), below the maker test bar value of 32 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://www.additive-x.com/shop/mpattachments/file/viewonline/id/566/product_id/2315",
+   "https://wiki.polymaker.com/polymaker-products/more-about-our-products/documents/technical-data-sheets/abs-asa/polylite-tm-abs",
+   "https://web.mae.ufl.edu/rapidpro/pages/3D%20Printing%20Paper%20Final%20Manuscript.pdf",
+   "https://doi.org/10.1108/RPJ-03-2016-0042",
+   "https://utw10945.utweb.utexas.edu/sites/default/files/2018/198%20ZPinningApproachforReducingMechanicalAnisotr.pdf"
+  ],
+  "estimated_fields": [
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-asa",
+  "name": "ASA (Polymaker PolyLite ASA)",
+  "process": "fdm",
+  "density": 1130,
+  "e_xy_mpa": 2379,
+  "e_z_mpa": 1965,
+  "nu": 0.37,
+  "uts_xy_mpa": 43.8,
+  "uts_z_mpa": 26.28,
+  "uts_z_measured_mpa": 32,
+  "z_knockdown": 0.6,
+  "elongation_pct": 6.7,
+  "hdt_c": 102.6,
+  "flex_strength_mpa": 73.4,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. Coupon Z ratio 0.73. Prusament ASA: density 1.07 g/cm3, 42 MPa yield, 1.6 GPa, HDT 93 C @0.45 MPa, 'interlayer adhesion' only 11 MPa, so 0.6 is recommended for design. Poisson's ratio taken from ABS (chemically similar). z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.73) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 26.3 MPa (0.6 \u00d7 along-layer), below the maker test bar value of 32 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://cdn.shopify.com/s/files/1/0603/6609/files/PolyLite_ASA_TDS_V5.1.pdf",
+   "https://storage.googleapis.com/prusa3d-content-prod-14e8-wordpress-prusament-prod/2024/05/bc8551ef-tds_prusament-asa_2024_en.pdf",
+   "https://web.mae.ufl.edu/rapidpro/pages/3D%20Printing%20Paper%20Final%20Manuscript.pdf"
+  ],
+  "estimated_fields": [
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-pc",
+  "name": "PC (Bambu Lab PC)",
+  "process": "fdm",
+  "density": 1200,
+  "e_xy_mpa": 2110,
+  "e_z_mpa": 1450,
+  "nu": 0.35,
+  "uts_xy_mpa": 62,
+  "uts_z_mpa": 46.5,
+  "uts_z_measured_mpa": 56,
+  "z_knockdown": 0.75,
+  "elongation_pct": 3.8,
+  "hdt_c": 112,
+  "flex_strength_mpa": 108,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. Bambu lists HDT 117 C at 1.8 MPa and 112 C at 0.45 MPa (inverted; likely a typo, treat ~112-117 C). Elongation at break (3.8%) is far below bulk PC; printed PC is notch-sensitive at layer lines. Poisson's ratio 0.29-0.39 measured with DIC by Cantrell et al. (mean ~0.35). z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.9) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 46.5 MPa (0.75 \u00d7 along-layer), below the maker test bar value of 56 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://www.additive-x.com/shop/mpattachments/file/viewonline/id/591/product_id/2340",
+   "https://web.mae.ufl.edu/rapidpro/pages/3D%20Printing%20Paper%20Final%20Manuscript.pdf",
+   "https://doi.org/10.1108/RPJ-03-2016-0042"
+  ],
+  "estimated_fields": [
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-pa",
+  "name": "Nylon PA6/66 (Polymaker PolyMide CoPA), dry",
+  "process": "fdm",
+  "density": 1120,
+  "e_xy_mpa": 2703,
+  "e_z_mpa": 2209,
+  "nu": 0.39,
+  "uts_xy_mpa": 78.0,
+  "uts_z_mpa": 42.9,
+  "uts_z_measured_mpa": 45.8,
+  "z_knockdown": 0.55,
+  "elongation_pct": 12.7,
+  "hdt_c": 111,
+  "flex_strength_mpa": 109.8,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. DRY values (annealed 80 C/6 h, dried 48 h). Nylon absorbs water (2.8% at 70% RH equilibrium). Saturated ('wet', 6.2% moisture): E 724 XY / 660 Z MPa, UTS 34.3 XY / 13.7 Z MPa. For parts living in room air, use something between dry and wet; for humid service use wet. No unfilled PA12 sheet with Z data was found; PA12 is lower in stiffness (~1.2-1.8 GPa) and absorbs less water. z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.59) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 42.9 MPa (0.55 \u00d7 along-layer), below the maker test bar value of 45.8 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://wiki.polymaker.com/polymaker-products/more-about-our-products/documents/technical-data-sheets/nylon/polymide-tm-copa",
+   "https://polymaker.com/wp-content/uploads/lana-downloads/TDS_Polymaker_PolyMide-CoPA_V5.5_2026-01-06_EN.pdf"
+  ],
+  "estimated_fields": [
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-pa6-cf",
+  "name": "PA6-CF carbon nylon (Polymaker PolyMide PA6-CF), dry",
+  "process": "fdm",
+  "density": 1170,
+  "e_xy_mpa": 7453,
+  "e_z_mpa": 4354,
+  "nu": 0.35,
+  "uts_xy_mpa": 105,
+  "uts_z_mpa": 63.0,
+  "uts_z_measured_mpa": 67.7,
+  "z_knockdown": 0.6,
+  "elongation_pct": 3.0,
+  "hdt_c": 215,
+  "flex_strength_mpa": 169,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. DRY (annealed 80 C/24 h, dried 48 h). Conditioned 70% RH/23 C: E 5666 XY / 4713 Z MPa, UTS 81.7 XY / 64.4 Z MPa, elongation 4.6% XY. Fibres align with the bead, so XY stiffness is strongly direction-dependent within the layer too. z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.64) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 63.0 MPa (0.6 \u00d7 along-layer), below the maker test bar value of 67.7 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://cdn.shopify.com/s/files/1/0603/6609/files/PolyMide_PA6_CF_TDS_V5.pdf"
+  ],
+  "estimated_fields": [
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-pa12-cf",
+  "name": "PA12-CF carbon nylon (Bambu Lab PAHT-CF), dry",
+  "process": "fdm",
+  "density": 1060,
+  "e_xy_mpa": 3860,
+  "e_z_mpa": 2180,
+  "nu": 0.35,
+  "uts_xy_mpa": 88,
+  "uts_z_mpa": 61.6,
+  "uts_z_measured_mpa": 64,
+  "z_knockdown": 0.7,
+  "elongation_pct": 10.4,
+  "hdt_c": 194,
+  "flex_strength_mpa": 140,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. DRY (annealed and dried 80 C/12 h). Less moisture-sensitive than PA6-CF. Z bending modulus only 1680 MPa vs 4120 XY. z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.73) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 61.6 MPa (0.7 \u00d7 along-layer), below the maker test bar value of 64 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://cdn.shopify.com/s/files/1/0380/5149/files/Bambu_PAHT-CF_Technical_Data_Sheet.pdf"
+  ],
+  "estimated_fields": [
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-petg-cf",
+  "name": "PETG-CF (Bambu Lab PETG-CF)",
+  "process": "fdm",
+  "density": 1250,
+  "e_xy_mpa": 2460,
+  "e_z_mpa": 1340,
+  "nu": 0.35,
+  "uts_xy_mpa": 59,
+  "uts_z_mpa": 35.4,
+  "uts_z_measured_mpa": 38,
+  "z_knockdown": 0.6,
+  "elongation_pct": 10.4,
+  "hdt_c": 74,
+  "flex_strength_mpa": 83,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. Z modulus is only 54% of XY. (Bambu's sheet intro text mistakenly calls it 'tough PLA'; the table is PETG-CF.) z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.64) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 35.4 MPa (0.6 \u00d7 along-layer), below the maker test bar value of 38 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://cdn.shopify.com/s/files/1/0380/5149/files/Bambu_PETG-CF_Technical_Data_Sheet.pdf"
+  ],
+  "estimated_fields": [
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-pla-cf",
+  "name": "PLA-CF (Bambu Lab PLA-CF)",
+  "process": "fdm",
+  "density": 1220,
+  "e_xy_mpa": 2790,
+  "e_z_mpa": 2160,
+  "nu": 0.34,
+  "uts_xy_mpa": 38,
+  "uts_z_mpa": 24.7,
+  "uts_z_measured_mpa": 26,
+  "z_knockdown": 0.65,
+  "elongation_pct": 12.7,
+  "hdt_c": 55,
+  "flex_strength_mpa": 96,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. Carbon fibre raises bending stiffness (3700 MPa XY) more than tensile modulus; Z bending strength 49 vs 96 MPa XY. z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.68) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 24.7 MPa (0.65 \u00d7 along-layer), below the maker test bar value of 26 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://cdn.shopify.com/s/files/1/0380/5149/files/Bambu_PLA-CF_Technical_Data_Sheet.pdf"
+  ],
+  "estimated_fields": [
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-tpu-95a",
+  "name": "TPU 95A (Bambu Lab TPU 95A)",
+  "process": "fdm",
+  "density": 1200,
+  "e_xy_mpa": 9.2,
+  "e_z_mpa": 7.8,
+  "nu": 0.47,
+  "uts_xy_mpa": 29.6,
+  "uts_z_mpa": 22.2,
+  "uts_z_measured_mpa": 23.2,
+  "z_knockdown": 0.75,
+  "elongation_pct": 700,
+  "hdt_c": null,
+  "flex_strength_mpa": null,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. Elongation is '>700%' XY / '>500%' Z (lower bounds). A linear-elastic model is only valid for small strains; use a hyperelastic model (e.g. Mooney-Rivlin) for real deflections. The 9.2 MPa modulus is low for a 95A TPU (often 20-30 MPa initial); treat stiffness as uncertain. No HDT (elastomer). Poisson's ratio ~0.47 (nearly incompressible); avoid 0.5 in FEA solvers. z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.78) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 22.2 MPa (0.75 \u00d7 along-layer), below the maker test bar value of 23.2 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://cdn.shopify.com/s/files/1/0645/5876/0155/files/Bambu_TPU_95A_Technical_Data_Sheet.pdf"
+  ],
+  "estimated_fields": [
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "fdm-pp",
+  "name": "PP polypropylene (UltiMaker PP)",
+  "process": "fdm",
+  "density": 890,
+  "e_xy_mpa": 253,
+  "e_z_mpa": 234,
+  "nu": 0.42,
+  "uts_xy_mpa": 10.2,
+  "uts_z_mpa": 8.16,
+  "uts_z_measured_mpa": 8.2,
+  "z_knockdown": 0.8,
+  "elongation_pct": 800,
+  "hdt_c": 64.1,
+  "flex_strength_mpa": 15.3,
+  "notes": "Values are from 100%-infill coupons printed and (for Bambu/Polymaker) annealed and dried by the maker; real parts with perimeters, seams, sparse infill, cooler layers or humid filament are weaker, especially in Z. UltiMaker v3.00 sheet, ASTM D3039. XY strength is yield (10.2 MPa; no break, >800% elongation); Z is break (8.2 MPa, yield 8.6 MPa). Printed PP is a soft, low-modulus copolymer grade; the 0.83 Z ratio comes from upright coupons. HDT given at 0.455 MPa only. z_knockdown is a recommended design factor on XY strength (estimated): the measured coupon ratio (0.8) reduced for real-part margin, since peer-reviewed tests often show larger Z losses than maker coupons. Across-layer strength used for safety checks: 8.2 MPa (0.8 \u00d7 along-layer), below the maker test bar value of 8.2 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://www.alloys.com.au/Documents/Ultimaker-PP-TDS-v3.00.pdf"
+  ],
+  "estimated_fields": [
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "resin-standard",
+  "name": "Standard resin (Anycubic Standard, typical MSLA)",
+  "process": "resin",
+  "density": 1130,
+  "e_xy_mpa": 1500,
+  "e_z_mpa": 1275,
+  "nu": 0.38,
+  "uts_xy_mpa": 45,
+  "uts_z_mpa": 38.2,
+  "uts_z_measured_mpa": 38.2,
+  "z_knockdown": 0.85,
+  "elongation_pct": 14,
+  "hdt_c": 62,
+  "flex_strength_mpa": 55,
+  "notes": "Only one (unspecified, usually flat) orientation is published. Z values are estimated with a knockdown: Formlabs reports near-isotropic strength after full post-cure, while an independent mSLA study (MDPI Applied Mechanics 2025) measured Z modulus at 80% of flat with no post-cure and 88% after 60 min (that page returned HTTP 403; figures from its search-index abstract). Anycubic lists ranges (tensile 40-50 MPa, elongation 12-16%, flexural 50-60 MPa, flexural modulus 1400-1600 MPa); midpoints used. No tensile modulus given, so E = flexural modulus midpoint. HDT 60-65 C is from the Anycubic Standard V2 page. SOURCE NOT REACHABLE: both Anycubic pages returned HTTP 429 to direct fetch, so these numbers come from the search engine's copy of those pages and are all marked estimated. Brittle; strength drops with under-curing and with age/UV.",
+  "sources": [
+   "https://eu.anycubic3d.com/products/colored-uv-resin",
+   "https://www.anycubic.au/products/standard-resin-v2",
+   "https://formlabs.com/blog/isotropy-in-SLA-3D-printing",
+   "https://www.mdpi.com/2673-3161/6/3/71"
+  ],
+  "estimated_fields": [
+   "density",
+   "E_xy_mpa",
+   "E_z_mpa",
+   "uts_xy_mpa",
+   "uts_z_mpa",
+   "elongation_pct",
+   "flex_strength_mpa",
+   "nu",
+   "hdt_c",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "resin-formlabs-grey-v5",
+  "name": "Formlabs Grey Resin V5 (SLA standard reference)",
+  "process": "resin",
+  "density": 1210,
+  "e_xy_mpa": 2675,
+  "e_z_mpa": 2408,
+  "nu": 0.38,
+  "uts_xy_mpa": 62,
+  "uts_z_mpa": 55.8,
+  "uts_z_measured_mpa": 55.8,
+  "z_knockdown": 0.9,
+  "elongation_pct": 13,
+  "hdt_c": 71,
+  "flex_strength_mpa": 103,
+  "notes": "Only one (unspecified, usually flat) orientation is published. Z values are estimated with a knockdown: Formlabs reports near-isotropic strength after full post-cure, while an independent mSLA study (MDPI Applied Mechanics 2025) measured Z modulus at 80% of flat with no post-cure and 88% after 60 min (that page returned HTTP 403; figures from its search-index abstract). Post-cured 15 min at 60 C. Room-temperature 5-min cure gives 54 MPa / 2500 MPa / HDT 62 C. Included as a well-characterised 'standard' resin for comparison with consumer MSLA resins.",
+  "sources": [
+   "https://formlabs.com/support/Density-of-selected-Formlabs-SLA-resins/",
+   "https://formlabs.com/store/materials/grey-resin/",
+   "https://formlabs.com/blog/isotropy-in-SLA-3D-printing",
+   "https://www.mdpi.com/2673-3161/6/3/71"
+  ],
+  "estimated_fields": [
+   "E_z_mpa",
+   "uts_z_mpa",
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "resin-abs-like",
+  "name": "ABS-like resin (Anycubic ABS-Like Resin+)",
+  "process": "resin",
+  "density": 1120,
+  "e_xy_mpa": 1150,
+  "e_z_mpa": 978,
+  "nu": 0.39,
+  "uts_xy_mpa": 32,
+  "uts_z_mpa": 27.2,
+  "uts_z_measured_mpa": 27.2,
+  "z_knockdown": 0.85,
+  "elongation_pct": 25,
+  "hdt_c": 62,
+  "flex_strength_mpa": 38,
+  "notes": "Only one (unspecified, usually flat) orientation is published. Z values are estimated with a knockdown: Formlabs reports near-isotropic strength after full post-cure, while an independent mSLA study (MDPI Applied Mechanics 2025) measured Z modulus at 80% of flat with no post-cure and 88% after 60 min (that page returned HTTP 403; figures from its search-index abstract). Anycubic user guide table: tensile 32 MPa, elongation 25%, flexural 38 MPa / 1150 MPa, Shore 81.3D, notched impact 45 J/m, HDT 60-65 C @0.45 MPa (midpoint used). Density is the liquid value (cured is ~5% higher). No tensile modulus given; E = flexural modulus. 'ABS-like' means tougher acrylate, not ABS-level heat resistance.",
+  "sources": [
+   "https://cdn.shopify.com/s/files/1/0245/5519/2380/files/Anycubic_ABS-Like_Resin_User_Manual_V1.0-EN_1.pdf",
+   "https://formlabs.com/blog/isotropy-in-SLA-3D-printing",
+   "https://www.mdpi.com/2673-3161/6/3/71"
+  ],
+  "estimated_fields": [
+   "E_xy_mpa",
+   "E_z_mpa",
+   "uts_z_mpa",
+   "nu",
+   "z_knockdown",
+   "density"
+  ]
+ },
+ {
+  "id": "resin-tough-2000",
+  "name": "Tough / engineering resin (Formlabs Tough 2000 V2)",
+  "process": "resin",
+  "density": 1200,
+  "e_xy_mpa": 1800,
+  "e_z_mpa": 1620,
+  "nu": 0.4,
+  "uts_xy_mpa": 40.4,
+  "uts_z_mpa": 36.36,
+  "uts_z_measured_mpa": 36.4,
+  "z_knockdown": 0.9,
+  "elongation_pct": 79,
+  "hdt_c": 70,
+  "flex_strength_mpa": 67,
+  "notes": "Only one (unspecified, usually flat) orientation is published. Z values are estimated with a knockdown: Formlabs reports near-isotropic strength after full post-cure, while an independent mSLA study (MDPI Applied Mechanics 2025) measured Z modulus at 80% of flat with no post-cure and 88% after 60 min (that page returned HTTP 403; figures from its search-index abstract). Form 4, 100 um, post-cured 12 min at 70 C (Form Cure V2). Flexural modulus 1701 MPa, notched Izod 25 J/m. Density is the V1 post-cured value (1.20 g/cm3); V1 itself was stiffer (2.2 GPa). Across-layer strength used for safety checks: 36.4 MPa (0.9 \u00d7 along-layer), below the maker test bar value of 36.4 MPa, because real prints bond worse than annealed solid test bars.",
+  "sources": [
+   "https://formlabs.com/support/Density-of-selected-Formlabs-SLA-resins/",
+   "https://formlabs.com/store/materials/tough-2000-resin/",
+   "https://formlabs.com/blog/isotropy-in-SLA-3D-printing",
+   "https://www.mdpi.com/2673-3161/6/3/71"
+  ],
+  "estimated_fields": [
+   "E_z_mpa",
+   "uts_z_mpa",
+   "nu",
+   "z_knockdown",
+   "density"
+  ]
+ },
+ {
+  "id": "resin-rigid-4000",
+  "name": "Rigid / glass-filled resin (Formlabs Rigid 4000)",
+  "process": "resin",
+  "density": 1330,
+  "e_xy_mpa": 4100,
+  "e_z_mpa": 3690,
+  "nu": 0.35,
+  "uts_xy_mpa": 69,
+  "uts_z_mpa": 62.1,
+  "uts_z_measured_mpa": 62.1,
+  "z_knockdown": 0.9,
+  "elongation_pct": 5.3,
+  "hdt_c": 77,
+  "flex_strength_mpa": 105,
+  "notes": "Only one (unspecified, usually flat) orientation is published. Z values are estimated with a knockdown: Formlabs reports near-isotropic strength after full post-cure, while an independent mSLA study (MDPI Applied Mechanics 2025) measured Z modulus at 80% of flat with no post-cure and 88% after 60 min (that page returned HTTP 403; figures from its search-index abstract). Form 3, 100 um, post-cured 15 min at 80 C. Glass-filled; flexural modulus 3400 MPa; brittle (5% elongation), design for fracture, not yield.",
+  "sources": [
+   "https://formlabs.com/support/Density-of-selected-Formlabs-SLA-resins/",
+   "https://formlabs.com/store/materials/rigid-4000-resin/",
+   "https://formlabs.com/blog/isotropy-in-SLA-3D-printing",
+   "https://www.mdpi.com/2673-3161/6/3/71"
+  ],
+  "estimated_fields": [
+   "E_z_mpa",
+   "uts_z_mpa",
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "resin-flexible-80a",
+  "name": "Flexible / elastic resin (Formlabs Flexible 80A V2)",
+  "process": "resin",
+  "density": 1120,
+  "e_xy_mpa": 5,
+  "e_z_mpa": 4.5,
+  "nu": 0.47,
+  "uts_xy_mpa": 10,
+  "uts_z_mpa": 9,
+  "uts_z_measured_mpa": 9,
+  "z_knockdown": 0.9,
+  "elongation_pct": 230,
+  "hdt_c": null,
+  "flex_strength_mpa": null,
+  "notes": "Only one (unspecified, usually flat) orientation is published. Z values are estimated with a knockdown: Formlabs reports near-isotropic strength after full post-cure, while an independent mSLA study (MDPI Applied Mechanics 2025) measured Z modulus at 80% of flat with no post-cure and 88% after 60 min (that page returned HTTP 403; figures from its search-index abstract). V2: tensile 10 MPa, elongation 230%, Shore 83A, tear 28 kN/m. No modulus is published for V2; E is a secant estimate from 'stress at 100% elongation' (V1: 6.3 MPa; V2 resellers quote 4.7 MPa). Use a hyperelastic model for real deflections. Density 1.12 g/cm3 is for Flexible 80A (version not stated).",
+  "sources": [
+   "https://formlabs.com/support/Density-of-selected-Formlabs-SLA-resins/",
+   "https://formlabs.com/store/materials/flexible-80a-resin/",
+   "https://formlabs.com/uk/products/flexible-80a-resin-v1/",
+   "https://formlabs.com/blog/isotropy-in-SLA-3D-printing"
+  ],
+  "estimated_fields": [
+   "E_xy_mpa",
+   "E_z_mpa",
+   "uts_z_mpa",
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "resin-elegoo-standard",
+  "name": "Elegoo Standard Photopolymer Resin",
+  "process": "resin",
+  "density": 1190,
+  "e_xy_mpa": 521,
+  "e_z_mpa": 417,
+  "nu": 0.38,
+  "uts_xy_mpa": 33.8,
+  "uts_z_mpa": 27.0,
+  "uts_z_measured_mpa": 27.0,
+  "z_knockdown": 0.8,
+  "elongation_pct": 8.77,
+  "hdt_c": 55,
+  "flex_strength_mpa": 30.1,
+  "notes": "Only one (unspecified, usually flat) orientation is published. Z values are estimated with a knockdown: Formlabs reports near-isotropic strength after full post-cure, while an independent mSLA study (MDPI Applied Mechanics 2025) measured Z modulus at 80% of flat with no post-cure and 88% after 60 min (that page returned HTTP 403; figures from its search-index abstract). Elegoo TDS (PJHC-D series): tensile 33.78 MPa +/-10%, tensile modulus 520.96 MPa, elongation 8.77%, flexural 30.11 MPa / 708.59 MPa, Shore 80-88D, impact 24.2 J/m. Test bars were post-cured only 1 min in water at 200 mW/cm2, so these are low (under-cured) values; a well-cured part is likely stiffer (standard acrylate resins are typically 1-2 GPa). TDS gives only liquid density 1.05-1.25 g/cm3; 1.19 is a retailer-quoted solid density. No HDT published; 55 C is an estimate for standard acrylate resins.",
+  "sources": [
+   "https://123-3d.nl/pdf/Elegoo_Standaard_Resin_TDS_EN.pdf",
+   "https://st.robu.in/product/elegoo-standard-resin-1000g-blue",
+   "https://www.mdpi.com/2673-3161/6/3/71"
+  ],
+  "estimated_fields": [
+   "E_z_mpa",
+   "uts_z_mpa",
+   "nu",
+   "hdt_c",
+   "density",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "resin-elegoo-abs-like",
+  "name": "Elegoo ABS-Like Resin (3.0)",
+  "process": "resin",
+  "density": 1150,
+  "e_xy_mpa": 1100,
+  "e_z_mpa": 935,
+  "nu": 0.39,
+  "uts_xy_mpa": 40,
+  "uts_z_mpa": 34,
+  "uts_z_measured_mpa": 34,
+  "z_knockdown": 0.85,
+  "elongation_pct": 24,
+  "hdt_c": 60,
+  "flex_strength_mpa": 50,
+  "notes": "Only one (unspecified, usually flat) orientation is published. Z values are estimated with a knockdown: Formlabs reports near-isotropic strength after full post-cure, while an independent mSLA study (MDPI Applied Mechanics 2025) measured Z modulus at 80% of flat with no post-cure and 88% after 60 min (that page returned HTTP 403; figures from its search-index abstract). No official Elegoo TDS with numbers could be retrieved (elegoo.com returned HTTP 429/404 repeatedly). Retailer copies of Elegoo's listing give tensile 30-52 MPa, elongation 24%, max flexural strength 50 MPa, Shore 75D, 'thermal deformation temperature 80 C', and a garbled flexural modulus '1.882-2.385 MPa'. Values here are conservative estimates in line with other ABS-like resins (Anycubic ABS-Like+: 32 MPa, 1150 MPa flex modulus, HDT 60-65 C). Replace with Elegoo TDS values when available.",
+  "sources": [
+   "https://www.cafaba.com.co/products/elegoo-abs-like-3d-printer-resin-30-405nm-uv-curing-photopolymer-resin-for-mars-saturn-jupiter-msla-dlp-lcd-3d-printing-with-strength-and-toughness-high-precision-low-viscosity-grey-2000g/200384533",
+   "https://retrogeektoys.com/?p=7163",
+   "https://cdn.shopify.com/s/files/1/0245/5519/2380/files/Anycubic_ABS-Like_Resin_User_Manual_V1.0-EN_1.pdf",
+   "https://www.elegoo.com/products/elegoo-abs-like-resin-v-3-0-plus"
+  ],
+  "estimated_fields": [
+   "density",
+   "E_xy_mpa",
+   "E_z_mpa",
+   "nu",
+   "uts_xy_mpa",
+   "uts_z_mpa",
+   "elongation_pct",
+   "flex_strength_mpa",
+   "hdt_c",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "resin-siraya-blu",
+  "name": "Siraya Tech Blu (tough resin)",
+  "process": "resin",
+  "density": 1150,
+  "e_xy_mpa": 1800,
+  "e_z_mpa": 1530,
+  "nu": 0.4,
+  "uts_xy_mpa": 50,
+  "uts_z_mpa": 42.5,
+  "uts_z_measured_mpa": 42.5,
+  "z_knockdown": 0.85,
+  "elongation_pct": 32,
+  "hdt_c": 70,
+  "flex_strength_mpa": null,
+  "notes": "Only one (unspecified, usually flat) orientation is published. Z values are estimated with a knockdown: Formlabs reports near-isotropic strength after full post-cure, while an independent mSLA study (MDPI Applied Mechanics 2025) measured Z modulus at 80% of flat with no post-cure and 88% after 60 min (that page returned HTTP 403; figures from its search-index abstract). Siraya TDS (Blu Emerald Blue / Clear V2 / Obsidian Black): solid density 1.15 (ASTM D792), yield 51, break 50 (ASTM D638), Young's modulus 1800, flexural modulus 1750, elongation 32, notched Izod 45, HDT 70 @0.455 MPa, Shore 80D. Units are not printed on the page (assumed MPa, %, J/m, C). Cure: ~15 min UV, ideally submerged in water. No flexural strength published.",
+  "sources": [
+   "https://siraya.tech/pages/blu-tough-resin-tds-for-regular-blu",
+   "https://formlabs.com/blog/isotropy-in-SLA-3D-printing",
+   "https://www.mdpi.com/2673-3161/6/3/71"
+  ],
+  "estimated_fields": [
+   "E_z_mpa",
+   "uts_z_mpa",
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "resin-formlabs-grey-pro",
+  "name": "Formlabs Grey Pro Resin",
+  "process": "resin",
+  "density": 1150,
+  "e_xy_mpa": 2600,
+  "e_z_mpa": 2340,
+  "nu": 0.38,
+  "uts_xy_mpa": 61,
+  "uts_z_mpa": 54.9,
+  "uts_z_measured_mpa": 54.9,
+  "z_knockdown": 0.9,
+  "elongation_pct": 13,
+  "hdt_c": 78,
+  "flex_strength_mpa": 86,
+  "notes": "Only one (unspecified, usually flat) orientation is published. Z values are estimated with a knockdown: Formlabs reports near-isotropic strength after full post-cure, while an independent mSLA study (MDPI Applied Mechanics 2025) measured Z modulus at 80% of flat with no post-cure and 88% after 60 min (that page returned HTTP 403; figures from its search-index abstract). Form 2, 100 um, post-cured 120 min at 80 C. Flexural modulus 2200 MPa, notched Izod 19 J/m.",
+  "sources": [
+   "https://formlabs.com/support/Density-of-selected-Formlabs-SLA-resins/",
+   "https://formlabs.com/store/materials/grey-pro-resin/",
+   "https://formlabs.com/blog/isotropy-in-SLA-3D-printing",
+   "https://www.mdpi.com/2673-3161/6/3/71"
+  ],
+  "estimated_fields": [
+   "E_z_mpa",
+   "uts_z_mpa",
+   "nu",
+   "z_knockdown"
+  ]
+ },
+ {
+  "id": "cf-plate",
+  "name": "Carbon fibre plate (3K twill, typical)",
+  "process": "other",
+  "density": 1550,
+  "e_xy_mpa": 60000,
+  "e_z_mpa": 60000,
+  "nu": 0.1,
+  "uts_xy_mpa": 600,
+  "uts_z_mpa": 600,
+  "notes": "Typical in-plane values for a quasi-isotropic 3K twill drone plate; treated as isotropic in-plane. For comparison with printed frames.",
+  "sources": [],
+  "estimated_fields": [
+   "all"
+  ]
+ },
+ {
+  "id": "al-6061-t6",
+  "name": "Aluminium 6061-T6",
+  "process": "other",
+  "density": 2700,
+  "e_xy_mpa": 68900,
+  "e_z_mpa": 68900,
+  "nu": 0.33,
+  "uts_xy_mpa": 276,
+  "uts_z_mpa": 276,
+  "notes": "Yield strength used as the limit.",
+  "sources": [
+   "https://asm.matweb.com/search/SpecificMaterial.asp?bassnum=ma6061t6"
+  ],
+  "estimated_fields": []
+ }
+]
