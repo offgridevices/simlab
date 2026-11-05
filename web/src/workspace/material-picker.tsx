@@ -3,7 +3,8 @@
 // strength along and across the printed layers. The chosen one is summed up
 // under the button.
 import { useState } from "react";
-import { CheckIcon, ChevronsUpDownIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, ChevronsUpDownIcon } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -77,7 +78,22 @@ export function MaterialPicker({ materials, value, onChange }: { materials: Mate
         <div className="grid grid-cols-2 gap-2">
           <Stat label={picked.process === "fdm" ? "Along layers" : "Strength"} value={n(picked.uts_xy_mpa)} unit="MPa" />
           {picked.process === "fdm" ? <Stat label="Across layers" value={n(picked.uts_z_mpa)} unit="MPa" /> : <Stat label="Stiffness" value={n(picked.e_xy_mpa / 1000, 3)} unit="GPa" />}
-          {picked.notes && <p className="col-span-2 text-xs text-muted-foreground">{picked.notes}</p>}
+          <p className="col-span-2 text-xs text-muted-foreground">
+            {picked.process === "fdm"
+              ? "Lab values for solid test bars. Real prints are weaker, most of all across layers, so SimLab checks safety against the across-layer number."
+              : "Lab values for solid test bars. Real parts can be a little weaker."}
+          </p>
+          {picked.notes && (
+            <Collapsible className="col-span-2">
+              <CollapsibleTrigger className="group inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:underline">
+                <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]:rotate-90" />
+                Where these numbers come from
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <p className="pt-1.5 text-xs text-muted-foreground">{picked.notes}</p>
+              </CollapsibleContent>
+            </Collapsible>
+          )}
         </div>
       )}
     </div>
