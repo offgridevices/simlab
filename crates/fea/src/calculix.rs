@@ -96,15 +96,22 @@ pub fn write_inp<W: Write>(w: &mut W, mesh: &TetMesh, prep: &Prepared, opts: &In
         None => writeln!(w, "*STATIC")?,
     }
     if opts.nlgeom {
+        // the load in four steps to start with (CalculiX grows or shrinks
+        // them as it goes): the whole spin in one Newton solve sometimes
+        // diverged, and the halving that follows costs more than this
+        writeln!(w, "0.25, 1.0")?;
+    }
+    if opts.nlgeom {
         // Newton converges on the displacement: CalculiX's default force
         // test compares the largest nodal residual with the AVERAGE nodal
         // force, which on a spinning part (big loads at the tips, tiny ones
         // near the hub) stalls at a few % while the corrections are already
         // 1e-5 of the step and the stresses settled. So: corrections under
         // 1e-4 of the displacement, residual under 10 % of the average force,
-        // and room for more iterations before CalculiX halves the step.
+        // and room for more iterations before CalculiX calls it diverging
+        // (I_0) or too slow (I_R) and halves the step.
         writeln!(w, "*CONTROLS, PARAMETERS=FIELD\n0.1, 1.e-4")?;
-        writeln!(w, "*CONTROLS, PARAMETERS=TIME INCREMENTATION\n4, 8, 9, 40, 10, 4, 0, 40")?;
+        writeln!(w, "*CONTROLS, PARAMETERS=TIME INCREMENTATION\n8, 16, 9, 40, 10, 4, 0, 40")?;
     }
     let nodal: Vec<f64> = if opts.native_loads {
         (0..3 * n).map(|d| prep.parts.surface[d] + prep.parts.inertia_nodal[d]).collect()

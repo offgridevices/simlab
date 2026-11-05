@@ -150,6 +150,7 @@ fn run_ccx(ctx: &Ctx, deck: &[u8], threads: usize) -> Result<String> {
 
     let mut tail: Vec<String> = vec![];
     let mut iteration = 0u32;
+    let mut load_done = 0.0f64;
     ctx.report(0.02, "CalculiX: reading the model");
     loop {
         match rx.recv_timeout(Duration::from_millis(500)) {
@@ -164,11 +165,15 @@ fn run_ccx(ctx: &Ctx, deck: &[u8], threads: usize) -> Result<String> {
                     tail.remove(0);
                 }
                 let low = l.to_ascii_lowercase();
+                // nonlinear runs go up in load steps: "sum of previous increments=0.5"
+                if let Some(v) = low.strip_prefix("sum of previous increments=") {
+                    load_done = v.trim().parse().unwrap_or(load_done);
+                }
                 if low.starts_with("iteration") {
                     iteration = l.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(iteration + 1);
-                    ctx.report((0.15 + 0.12 * iteration as f32).min(0.85), &format!("CalculiX: nonlinear pass {iteration}"));
-                } else if low.contains("factoring the system of equations") {
-                    ctx.report((0.1 + 0.12 * iteration as f32).min(0.85), "CalculiX: solving the equations");
+                    ctx.report(0.1 + 0.75 * load_done as f32, &format!("CalculiX: {:.0}% of the load applied, Newton pass {iteration}", load_done * 100.0));
+                } else if low.contains("factoring the system of equations") && load_done == 0.0 && iteration <= 1 {
+                    ctx.report(0.1, "CalculiX: solving the equations");
                 } else if low.contains("calculating the stiffness") || low.contains("determining the structure") {
                     ctx.report(0.05, "CalculiX: building the equations");
                 } else if low.contains("calculating the stress") || low.contains("calculating the results") {
@@ -227,15 +232,17 @@ impl Drop for Kill {
 /// estimate of the same mesh. Measured on the E-v5 propeller at Normal
 /// (557 k equations, CalculiX 2.21 with SPOOLES, 12 cores in Colima,
 /// November 2026): one factorization ~15 s; the linear solve took 19 s, the
-/// nonlinear spinning one 152 s (11 Newton passes); peak memory 3.9 GB.
+/// nonlinear spinning one 225 s (the load in quarter steps, ~6 Newton
+/// passes each; the same answer to 7 digits as one 152 s whole-load
+/// solve, which another time diverged); peak memory 3.9 GB.
 pub fn estimate(app: &App, _m: &ModelRow, c: &StrengthConfig, native: Value) -> Result<Value> {
     let mut e = native.clone();
     let dofs = native["size"]["dofs"].as_f64().unwrap_or(0.0).max(1000.0);
     let scale = dofs / 557_000.0;
-    // a held part that spins is solved geometrically nonlinear: ~11 factorizations
+    // a held part that spins is solved geometrically nonlinear
     let nonlinear = matches!(c.support, simlab_core::Support::Fixed { .. }) && c.loads.iter().any(|l| matches!(l, simlab_core::Load::Spin { .. }));
-    let passes = if nonlinear { 11.0 } else { 1.0 };
-    let solve = 5.0 + passes * 15.0 * scale.powf(1.5);
+    let per_unit = if nonlinear { 220.0 } else { 15.0 };
+    let solve = 5.0 + per_unit * scale.powf(1.5);
     let mem = (0.3e9 + 3.6e9 * scale.powf(1.3)) as u64;
     let (_, vm_mem) = crate::system::docker_vm();
     let budget = vm_mem.unwrap_or_else(|| app.settings().budget_bytes());
