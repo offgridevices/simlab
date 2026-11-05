@@ -258,6 +258,15 @@ impl Db {
         let rows = st.query_map([project_id], Self::model_from)?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
+    /// Parts waiting for Gmsh, and parts that failed only because it was missing.
+    pub fn models_waiting_for_mesher(&self) -> Result<Vec<ModelRow>> {
+        let mut st = self.conn.prepare(&format!(
+            "SELECT {} FROM models WHERE status='waiting' OR (status='failed' AND lower(message) LIKE '%gmsh mesher is not set up yet%') ORDER BY created_at",
+            Self::MODEL_COLS
+        ))?;
+        let rows = st.query_map([], Self::model_from)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
     pub fn model(&self, id: &str) -> Result<ModelRow> {
         self.conn
             .query_row(&format!("SELECT {} FROM models WHERE id=?1", Self::MODEL_COLS), [id], Self::model_from)

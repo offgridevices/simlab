@@ -174,6 +174,8 @@ function Loaded({
         ? source.error || model?.message || "The part could not be read"
         : !runId && model?.status === "processing"
           ? model.message || "Reading the part and finding its faces"
+          : !runId && model?.status === "waiting"
+            ? "Waiting for Gmsh. Set it up in the Model panel and this part opens by itself."
           : runId
             ? "Loading the result"
             : `Loading the part${model?.triangles ? ` (${model.triangles.toLocaleString("en-US")} triangles)` : ""}`;

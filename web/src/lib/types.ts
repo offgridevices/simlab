@@ -147,7 +147,8 @@ export interface Model {
   file_name: string;
   format: ModelFormat;
   unit_mm: number;
-  status: "processing" | "ready" | "failed";
+  /** waiting: saved, and opens by itself once Gmsh is set up */
+  status: "processing" | "ready" | "failed" | "waiting";
   message: string;
   created_at: string;
   bbox_mm?: { min: Vec3; max: Vec3 };

@@ -10,8 +10,10 @@ import { Input } from "@/components/ui/input";
 import { Loader } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useApp } from "../lib/app";
+import { Confirm } from "../components/confirm";
+import { useAsync } from "../lib/hooks";
 import { dirLabel, KIND_NAME, n, patchLabel } from "../lib/format";
-import type { Model, Patch } from "../lib/types";
+import type { Check, Model, Patch } from "../lib/types";
 import type { ProjectData } from "../lib/hooks";
 import type { Prepared } from "../viewer/prepare";
 import type { Nav } from "../screens/workspace";
@@ -155,6 +157,8 @@ export function ModelPanel({ data, model, nav, prepared, reload }: { data: Proje
           <Loader />
           {model.message || "Reading the part and finding its faces"}
         </Card>
+      ) : model.status === "waiting" || (model.status === "failed" && /gmsh mesher is not set up yet/i.test(model.message)) ? (
+        <MesherSetup message={model.message} />
       ) : model.status === "failed" ? (
         <Card className="gap-2 border-clay/40 bg-clay/10 p-4 text-sm text-clay-text" role="alert">
           <span className="font-medium">This file could not be read.</span>
@@ -312,6 +316,67 @@ function PickedFace({ model, patch, hole, onSaved, onClose }: { model: Model; pa
           {saving ? "Saving…" : "Save"}
         </Button>
       </form>
+    </Card>
+  );
+}
+
+/** a part waiting for Gmsh: offers the system check's own fix, with its consent question */
+function MesherSetup({ message }: { message: string }) {
+  const { api, listen } = useApp();
+  const health = useAsync("health:mesher", () => api.health());
+  const [check, setCheck] = useState<Check | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [error, setError] = useState("");
+  const c = check ?? health.value?.checks.find((x) => x.id === "mesher") ?? null;
+  useEffect(
+    () =>
+      listen((e) => {
+        if (e.type === "check" && e.check.id === "mesher") setCheck(e.check);
+      }),
+    [listen],
+  );
+  const working = c?.status === "working";
+  const go = async () => {
+    setAsking(false);
+    setError("");
+    try {
+      await api.fix("mesher");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start setting up Gmsh");
+    }
+  };
+  return (
+    <Card className="gap-3 border-gold/40 bg-gold/10 p-4 text-sm text-gold-text" role="alert" data-testid="mesher-waiting">
+      {working ? (
+        <>
+          <Loader />
+          <span>{c?.detail || "Setting up Gmsh…"} This part opens by itself when it is ready.</span>
+        </>
+      ) : (
+        <>
+          <span className="font-medium">This part is saved and waiting for Gmsh.</span>
+          <span>{c?.status === "error" ? c.detail : c?.fix ? "SimLab needs Gmsh to open any part. It goes in SimLab's own folder; nothing is installed system-wide." : c?.detail || message}</span>
+          {c?.fix && (
+            <div>
+              <Button size="sm" onClick={() => setAsking(true)} data-testid="mesher-setup">
+                {c.fix.label}
+              </Button>
+            </div>
+          )}
+          {error && <span className="text-clay-text">{error}</span>}
+        </>
+      )}
+      <Confirm
+        open={asking}
+        onOpenChange={setAsking}
+        title={`${c?.fix?.label ?? "Set up Gmsh"}?`}
+        description={c?.fix?.asks ?? ""}
+        action={c?.fix?.label ?? "Set up"}
+        cancel="Not now"
+        destructive={false}
+        onConfirm={go}
+        testId="mesher-confirm"
+      />
     </Card>
   );
 }

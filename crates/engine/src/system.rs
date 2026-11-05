@@ -126,7 +126,7 @@ pub fn run_checks(app: &App) -> Vec<Check> {
             .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "4.15.2")
             .unwrap_or(false);
     if gmsh_ok {
-        out.push(check("mesher", "Gmsh mesher 4.15.2", "ok", "Reads STEP and STL, builds the stress-test mesh", None));
+        out.push(check("mesher", "Gmsh mesher 4.15.2", "ok", "Opens every part (STL, STEP, OBJ, 3MF) and builds the stress-test mesh", None));
     } else if uv.is_none() {
         out.push(check(
             "mesher",
@@ -140,7 +140,7 @@ pub fn run_checks(app: &App) -> Vec<Check> {
             "mesher",
             "Gmsh mesher",
             "missing",
-            "Not set up yet. Needed to read STEP files and for every stress test.",
+            "Not set up yet. SimLab needs it to open any part and for stress tests.",
             Some(Fix {
                 label: "Set up Gmsh".into(),
                 asks: "Download Gmsh 4.15.2 and NumPy 2.5.4 (about 60 MB, checked against locked hashes) into SimLab's own folder? Nothing is installed system-wide.".into(),
@@ -302,6 +302,9 @@ pub fn fix(app: &Arc<App>, id: &str) -> anyhow::Result<()> {
         _ => Err(anyhow::anyhow!("nothing to fix for {id}")),
     };
     refresh(app);
+    if id == "mesher" && result.is_ok() {
+        crate::models::resume_waiting(app);
+    }
     result
 }
 
@@ -349,6 +352,11 @@ pub fn shutdown(app: &App) {
             .process_group(0)
             .spawn();
     }
+}
+
+/// Gmsh is set up in SimLab's own folder (cheap; the system check also imports it).
+pub fn mesher_ready(app: &App) -> bool {
+    app.python().exists()
 }
 
 pub fn setup_mesher(app: &App) -> anyhow::Result<()> {

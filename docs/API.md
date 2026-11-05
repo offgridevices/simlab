@@ -46,7 +46,7 @@ containers a crashed engine left behind are killed at start-up.
 | POST | `/api/projects` | `{ name, notes? }` → `Project` |
 | GET | `/api/projects/:id` | `{ project, models: Model[], studies: Study[] }` |
 | PATCH / DELETE | `/api/projects/:id` | `{ name?, notes? }` |
-| POST | `/api/projects/:id/models` | multipart: `file` (STL, STEP/STP, OBJ, 3MF), `name?`, `unit_mm?` (mm per file unit, default 1) → `Model` with `status: "processing"` |
+| POST | `/api/projects/:id/models` | multipart: `file` (STL, STEP/STP, OBJ, 3MF), `name?`, `unit_mm?` (mm per file unit, default 1) → `Model` with `status: "processing"` (or `"waiting"` when Gmsh is not set up yet: the file is kept and opens by itself after `POST /api/system/fix { id: "mesher" }`) |
 | GET | `/api/models/:id` | `Model` |
 | PATCH / DELETE | `/api/models/:id` | `{ name?, unit_mm?, patch_labels?: { [patchId]: string } }` |
 | GET | `/api/models/:id/surface/:buffer` | `positions.f32` (xyz, model mm), `normals.f32`, `indices.u32`, `patch.u32` (one per triangle) |
@@ -55,7 +55,7 @@ containers a crashed engine left behind are killed at start-up.
 ```
 Model = {
   id, project_id, name, file_name, format: "stl"|"step"|"obj"|"3mf",
-  unit_mm, status: "processing"|"ready"|"failed", message,
+  unit_mm, status: "processing"|"ready"|"failed"|"waiting", message,
   created_at,
   bbox_mm?: { min: [x,y,z], max: [x,y,z] }, size_mm?: [dx,dy,dz],
   volume_mm3?, area_mm2?, triangles?, watertight?,

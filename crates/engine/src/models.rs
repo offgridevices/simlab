@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 
+/// The error when Gmsh is missing (also how an older failed part is recognised).
+pub const MESHER_MISSING: &str = "The Gmsh mesher is not set up yet: open Settings → System check and press \"Set up Gmsh\"";
+
 pub const MAX_UPLOAD: usize = 512 * 1024 * 1024;
 
 pub fn format_of(file_name: &str) -> Option<&'static str> {
@@ -50,16 +53,42 @@ pub fn create(app: &Arc<App>, project_id: &str, file_name: &str, name: Option<St
         file_name: file_name.into(),
         format: format.into(),
         unit_mm,
-        status: "processing".into(),
-        message: "Reading the part".into(),
+        status: if crate::system::mesher_ready(app) { "processing" } else { "waiting" }.into(),
+        message: if crate::system::mesher_ready(app) { "Reading the part".into() } else { WAITING_FOR_MESHER.into() },
         info: json!({}),
         patch_labels: json!({}),
         created_at: now(),
     };
     app.db().insert_model(&row)?;
     app.db().touch_project(project_id)?;
+    if row.status == "processing" {
+        start_processing(app, &row.id);
+    }
+    Ok(row)
+}
+
+/// What a part says while it waits for Gmsh (needed to open any part).
+pub const WAITING_FOR_MESHER: &str = "Waiting for Gmsh, which SimLab needs to open parts. Set it up here or in Settings → System check, and this part opens by itself.";
+
+/// Opens every part that was waiting for Gmsh (or failed because it was
+/// missing), now that it is set up.
+pub fn resume_waiting(app: &Arc<App>) {
+    let waiting = app.db().models_waiting_for_mesher().unwrap_or_default();
+    for mut m in waiting {
+        m.status = "processing".into();
+        m.message = "Reading the part".into();
+        if app.db().update_model(&m).is_ok() {
+            app.emit(json!({"type": "model", "model": m.to_json()}));
+            app.emit(json!({"type": "project", "project_id": m.project_id}));
+            start_processing(app, &m.id);
+        }
+    }
+}
+
+/// Reads a saved part in the background and records the outcome.
+fn start_processing(app: &Arc<App>, model_id: &str) {
     let app2 = app.clone();
-    let mid = row.id.clone();
+    let mid = model_id.to_string();
     tokio::task::spawn_blocking(move || {
         let result = process(&app2, &mid);
         let mut m = match app2.db().model(&mid) {
@@ -81,7 +110,6 @@ pub fn create(app: &Arc<App>, project_id: &str, file_name: &str, name: Option<St
         app2.emit(json!({"type": "model", "model": m.to_json()}));
         app2.emit(json!({"type": "project", "project_id": m.project_id}));
     });
-    Ok(row)
 }
 
 /// The file the mesher reads (STEP/IGES as is; OBJ converted to STL).
@@ -172,7 +200,7 @@ pub fn load_surface_mm(app: &App, m: &ModelRow) -> Result<TriMesh> {
 pub fn run_mesher(app: &App, args: &[&std::ffi::OsStr], mut on_progress: impl FnMut(f32, &str)) -> Result<()> {
     let py = app.python();
     if !py.exists() {
-        bail!("the Gmsh mesher is not set up yet: open Settings → System check and press \"Set up Gmsh\"");
+        bail!("{MESHER_MISSING}");
     }
     let mut child = Command::new(&py)
         .arg("-I")
