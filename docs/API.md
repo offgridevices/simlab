@@ -155,8 +155,10 @@ StrengthSummary = { kind: "strength", headline, verdict: "safe"|"marginal"|"brea
   critical_point_mm, critical_patch?, breaks_at?: { load_factor, rpm?, text },
   mass_g, elements, nodes, dofs, solver, solve_seconds, mesh_seconds,
   reactions_n?: [x,y,z], warnings: string[], accuracy,
-  engine?, check?: { native_run_id, text, agrees, native: {max_von_mises_mpa, safety_factor, max_displacement_mm},
-                     calculix: {...}, diff_pct: {max_von_mises, safety_factor, max_displacement} } }   // CalculiX checks
+  engine?, equilibrium_error?,   // CalculiX checks: how far CalculiX's own nodal forces miss the loads (relative; above 0.02 the check is not trusted)
+  check?: { native_run_id, text, agrees, same_mesh,   // agrees: every difference within 0.1% and CalculiX balanced
+            native: {max_von_mises_mpa, safety_factor, max_displacement_mm, elements},
+            calculix: {...}, diff_pct: {max_von_mises, safety_factor, max_displacement} } }   // CalculiX checks
 WindSummary = { kind: "wind", engine: "reference"|"native", method: "Accurate (OpenFOAM)"|"Quick preview (GPU)",
   headline, short, force_n: [x,y,z], moment_nm: [x,y,z],
   drag_n, lift_n, side_n, cd?, ref_area_mm2, thrust_n?, thrust_g?, torque_nm?, power_w?, rpm?,
