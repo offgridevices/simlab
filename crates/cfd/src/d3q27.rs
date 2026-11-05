@@ -28,12 +28,3 @@ pub const fn slot(i: usize) -> usize {
     if i < REST { i } else { i - 1 }
 }
 
-/// Directions whose links are stored once (the "positive" half).
-pub fn canonical(i: usize) -> bool {
-    i > REST
-}
-
-/// Index of a canonical direction among the 13 canonical ones.
-pub const fn canon_idx(i: usize) -> usize {
-    i - REST - 1
-}

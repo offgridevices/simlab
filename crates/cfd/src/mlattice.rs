@@ -1,14 +1,14 @@
 //! The multi-level D3Q27 lattice on the GPU: nested node-aligned boxes,
 //! each half the cell size of its parent and stepped twice per parent step
-//! (acoustic scaling: the same lattice velocity on every level). The part
-//! (static or spinning) lives on the finest level; the coarsest level holds
-//! the domain faces. Lattice units of the finest level unless stated.
+//! (acoustic scaling: the same lattice velocity on every level). The still
+//! part lives on the finest level; the coarsest level holds the domain
+//! faces. Lattice units of the finest level unless stated.
 
-use crate::d3q27::{Q, REST, c, slot, weight};
+use crate::d3q27::{Q, REST, slot};
 use crate::gpu::{Gpu, gpu};
 use crate::lattice::{FaceBc, Storage};
 use crate::mshader::{self, LevelShader, MW, RED_CHUNK, RS, SliceDef, T_FACE, T_GHOST, T_RESTRICT, T_SOLID, WG};
-use crate::voxel::{SpinVoxels, StaticVoxels};
+use crate::voxel::StaticVoxels;
 use anyhow::{Result, bail};
 use bytemuck::{Pod, Zeroable};
 
@@ -41,11 +41,9 @@ pub struct MultiSetup {
     pub absorb_velocity: bool,
     pub total_pressure_inlet: bool,
     pub storage: Storage,
-    /// moment reference and spin centre, finest-level coordinates
+    /// moment reference, finest-level coordinates
     pub center: [f64; 3],
     pub debug_dump: bool,
-    /// Spalding wall model in the first fluid cell (finest level)
-    pub wall_model: bool,
 }
 
 impl MultiSetup {
@@ -72,8 +70,6 @@ impl MultiSetup {
 pub enum MGeometry {
     None,
     Static(StaticVoxels),
-    /// box in finest-level cells holding every cell the part can reach
-    Spin { vox: SpinVoxels, box_lo: [i32; 3], box_n: [u32; 3] },
 }
 
 /// Sampling: surface vertices (body coordinates relative to the centre,
@@ -111,9 +107,6 @@ enum Kind {
     Step,
     Ghost,
     Restrict,
-    Scatter,
-    Voxelize,
-    Qclear,
     Reduce,
     Verts,
     Slices,
@@ -127,7 +120,7 @@ struct LevelGpu {
     init: wgpu::ComputePipeline,
     dump: wgpu::ComputePipeline,
     bg: wgpu::BindGroup,
-    bufs: Vec<wgpu::Buffer>,
+    _bufs: Vec<wgpu::Buffer>,
     /// which population set is the source for the next step
     src: u32,
     /// moment slot written by the latest step
@@ -224,21 +217,10 @@ impl MultiLattice {
         let maxb = g.max_buffer();
 
         // geometry (finest level)
-        let fd = setup.dims(finest);
-        let fn_ = fd.iter().map(|&d| d as u64).product::<u64>();
-        let (moving, nrec, box_lo, box_n) = match &geom {
-            MGeometry::Spin { box_lo, box_n, .. } => (true, box_n.iter().map(|&v| v as u64).product::<u64>() as u32, *box_lo, *box_n),
-            MGeometry::Static(v) => (false, v.walls.len() as u32, [0; 3], [1; 3]),
-            MGeometry::None => (false, 0, [0; 3], [1; 3]),
+        let nrec = match &geom {
+            MGeometry::Static(v) => v.walls.len() as u32,
+            MGeometry::None => 0,
         };
-        if moving {
-            for k in 0..3 {
-                if box_lo[k] < 2 || box_lo[k] as i64 + box_n[k] as i64 > fd[k] as i64 - 2 {
-                    bail!("the spinning part's box leaves the finest level");
-                }
-            }
-        }
-
         let st = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC;
         let mk = |label: &str, size: u64| -> wgpu::Buffer {
             dev.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: size.max(16).next_multiple_of(16), usage: st, mapped_at_creation: false })
@@ -258,16 +240,9 @@ impl MultiLattice {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let (occ_bits, tris): (&[u32], Vec<f32>) = match &geom {
-            MGeometry::Spin { vox, .. } => (&vox.occ_bits, vox.tris.iter().flatten().copied().collect()),
-            _ => (&[], vec![]),
-        };
-        let occ = mk("occ", occ_bits.len() as u64 * 4);
-        let tris_b = mk("tris", tris.len() as u64 * 4);
-        let qscr = mk("qscr", if moving { nrec as u64 * 13 * 8 } else { 16 });
         let nvert = probes.verts.len() as u32;
         let probes_b = mk("probes", nvert as u64 * 32);
-        mem += recs.size() + red.size() + occ.size() + tris_b.size() + qscr.size() + probes_b.size();
+        mem += recs.size() + red.size() + probes_b.size();
 
         // slice pixels: each pixel taken from the finest level covering it
         let npix: u32 = probes.slices.iter().map(|(s, _)| s.nu * s.nv).sum();
@@ -386,36 +361,12 @@ impl MultiLattice {
                 }
                 q.write_buffer(&recs, 0, bytemuck::cast_slice(&words));
             }
-            MGeometry::Spin { .. } => {
-                let mut words: Vec<u32> = Vec::with_capacity(nrec as usize * RS as usize);
-                let mut k = 0u32;
-                for z in 0..box_n[2] {
-                    for y in 0..box_n[1] {
-                        for x in 0..box_n[0] {
-                            let cc = ((z as i64 + box_lo[2] as i64) * fd[1] as i64 + (y as i64 + box_lo[1] as i64)) * fd[0] as i64 + x as i64 + box_lo[0] as i64;
-                            let mut w = [0u32; RS as usize];
-                            w[1] = cc as u32;
-                            words.extend_from_slice(&w);
-                            rec_of.push((cc as u32, k + 1));
-                            k += 1;
-                        }
-                    }
-                }
-                q.write_buffer(&recs, 0, bytemuck::cast_slice(&words));
-                let mut init = vec![0u32; nrec as usize * 13 * 2];
-                for cpair in init.chunks_exact_mut(2) {
-                    cpair[0] = 0x7f7f_ffff;
-                }
-                q.write_buffer(&qscr, 0, bytemuck::cast_slice(&init));
-                q.write_buffer(&occ, 0, bytemuck::cast_slice(occ_bits));
-                q.write_buffer(&tris_b, 0, bytemuck::cast_slice(&tris));
-            }
             MGeometry::None => {}
         }
         rec_of.sort_unstable();
         let mut solid: Vec<u32> = match &geom {
             MGeometry::Static(v) => v.solid.clone(),
-            _ => vec![],
+            MGeometry::None => vec![],
         };
         solid.sort_unstable();
         if nvert > 0 {
@@ -583,26 +534,7 @@ impl MultiLattice {
                 } else {
                     [(setup.center[0] - org[l][0]) / scale_l, (setup.center[1] - org[l][1]) / scale_l, (setup.center[2] - org[l][2]) / scale_l]
                 },
-                moving: moving && l == finest,
                 nrec: if l == finest { nrec } else { 0 },
-                box_lo,
-                box_n,
-                occ_lo: match &geom {
-                    MGeometry::Spin { vox, .. } => vox.occ_lo,
-                    _ => [0.0; 3],
-                },
-                occ_h: match &geom {
-                    MGeometry::Spin { vox, .. } => vox.occ_h,
-                    _ => 1.0,
-                },
-                occ_n: match &geom {
-                    MGeometry::Spin { vox, .. } => [vox.occ_dims[0] as u32, vox.occ_dims[1] as u32, vox.occ_dims[2] as u32],
-                    _ => [1; 3],
-                },
-                ntri: match &geom {
-                    MGeometry::Spin { vox, .. } => vox.tris.len() as u32,
-                    _ => 0,
-                },
                 child,
                 has_parent: l > 0,
                 nface: faces.len() as u32,
@@ -612,7 +544,6 @@ impl MultiLattice {
                 vertex_offset: probes.vertex_offset,
                 npix: (pix_lists[l].len() / 2) as u32,
                 hist_off,
-                wall_model: setup.wall_model && l == finest,
             };
             pre.push(Pre { cfg, dims, n, pops, flags: flags_b, lists: lists_b, mom_child, mom_up, spix, dump });
         }
@@ -621,7 +552,7 @@ impl MultiLattice {
         }
 
         let mut entries: Vec<wgpu::BindGroupLayoutEntry> = (0..mshader::MAX_POP_BUFS as u32).map(sto).collect();
-        for b in 8..=22 {
+        for b in (8..=15).chain(19..=22) {
             entries.push(sto(b));
         }
         let bgl0 = dev.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("bgl0"), entries: &entries });
@@ -640,7 +571,7 @@ impl MultiLattice {
                 let buf = p.pops.get(b).unwrap_or(&dummy);
                 bge.push(wgpu::BindGroupEntry { binding: b as u32, resource: buf.as_entire_binding() });
             }
-            let others: [(u32, &wgpu::Buffer); 15] = [
+            let others: [(u32, &wgpu::Buffer); 12] = [
                 (8, &p.flags),
                 (9, if fin { &recs } else { &dummy }),
                 (10, &p.lists),
@@ -649,9 +580,6 @@ impl MultiLattice {
                 (13, &p.mom_up),
                 (14, child_up),
                 (15, if fin { &red } else { &dummy }),
-                (16, if fin { &occ } else { &dummy }),
-                (17, if fin { &tris_b } else { &dummy }),
-                (18, if fin { &qscr } else { &dummy }),
                 (19, if fin { &probes_b } else { &dummy }),
                 (20, &p.spix),
                 (21, &sacc),
@@ -695,11 +623,6 @@ impl MultiLattice {
             if fin {
                 pipes.push((Kind::Reduce, pipe("reduce1")));
                 pipes.push((Kind::Verts, pipe("sample_verts")));
-                if moving {
-                    pipes.push((Kind::Scatter, pipe("tri_scatter")));
-                    pipes.push((Kind::Voxelize, pipe("voxelize")));
-                    pipes.push((Kind::Qclear, pipe("qclear")));
-                }
             }
             let init = pipe("init");
             let dump = pipe("dump_macro");
@@ -715,7 +638,7 @@ impl MultiLattice {
                 init,
                 dump,
                 bg,
-                bufs: [p.pops.clone(), vec![p.flags.clone(), p.lists.clone(), p.mom_child.clone(), p.mom_up.clone(), p.spix.clone()]].concat(),
+                _bufs: [p.pops.clone(), vec![p.flags.clone(), p.lists.clone(), p.mom_child.clone(), p.mom_up.clone(), p.spix.clone()]].concat(),
                 src: 0,
                 mslot: 1,
                 steps: 0,
@@ -868,7 +791,7 @@ impl MultiLattice {
         let lsrc = self.levels[l].src;
         let lmw = 1 - self.levels[l].mslot;
         let hslot = (*fine_i % self.hist_cap) as u32;
-        let mut push = |s: &Self, k: Kind, threads: u64, e: StepParams, ops: &mut Vec<_>, ents: &mut Vec<StepParams>| {
+        let push = |s: &Self, k: Kind, threads: u64, e: StepParams, ops: &mut Vec<_>, ents: &mut Vec<StepParams>| {
             let _ = s;
             ents.push(e);
             ops.push((l, k, threads, ents.len() - 1));
@@ -876,11 +799,6 @@ impl MultiLattice {
         let base = self.params(&sin, lsrc, hslot, lmw, 0, 0, 0.0);
         if l == 0 && self.levels[0].cfg.nface > 0 {
             push(self, Kind::Face, self.levels[0].cfg.nface as u64, base, ops, ents);
-        }
-        if l == finest && self.levels[l].cfg.moving {
-            push(self, Kind::Scatter, self.levels[l].cfg.ntri as u64, base, ops, ents);
-            push(self, Kind::Voxelize, self.nrec as u64, base, ops, ents);
-            push(self, Kind::Qclear, self.nrec as u64 * 13, base, ops, ents);
         }
         push(self, Kind::Step, self.levels[l].n, base, ops, ents);
         self.levels[l].src = 1 - lsrc;
@@ -1028,10 +946,3 @@ fn read_buffer<T: Pod>(g: &Gpu, src: &wgpu::Buffer, size: u64) -> Result<Vec<T>>
     read_mapped(g, &staging, size)
 }
 
-/// Weight check for tests.
-pub fn weights_sum() -> f64 {
-    (0..Q).map(weight).sum()
-}
-pub fn dir(i: usize) -> [i32; 3] {
-    c(i)
-}

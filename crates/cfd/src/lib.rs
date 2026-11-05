@@ -1,22 +1,34 @@
-//! SimLab wind tunnel: a lattice Boltzmann solver on the GPU (wgpu → Metal).
+//! SimLab wind tunnel: lattice Boltzmann on the GPU (wgpu -> Metal). A quick
+//! preview; the reference answer for air tests is the OpenFOAM runner.
 //!
-//! * D3Q19 lattice, in-place AA-pattern streaming (one copy of the
-//!   populations), regularized BGK collision with a Smagorinsky eddy
-//!   viscosity computed locally from the non-equilibrium stress.
-//! * Populations in FP32, or FP16 (scaled IEEE half with stochastic
-//!   rounding, FP32 arithmetic) to fit twice the cells.
-//! * Static parts: robust CPU voxelization (ray-parity / winding voting
-//!   along x, y and z), Bouzidi interpolated bounce-back with per-link wall
-//!   distances from exact ray–triangle tests, thin sheets block the flow.
-//! * Spinning parts: re-voxelized on the GPU every step (triangles scattered
-//!   onto the lattice links, occupancy from a body-frame grid 8× finer than
-//!   the lattice), moving-wall bounce-back with u = ω × r, refill of cells the
-//!   part uncovers, momentum of covered/uncovered cells added to the force.
-//! * Forces: Galilean-invariant momentum exchange, reduced on the GPU every
-//!   step, averaged over the converged part of the run.
+//! Two solvers:
+//! * Still parts with 48 or more cells across (Draft and up): a refined
+//!   D3Q27 solver (`mlattice`, `mshader`): nested boxes around the part,
+//!   each half the cell size of the one outside it (2-4 levels, the coarsest
+//!   keeping ~24 cells across the part), a cumulant-type collision that is
+//!   stable at very low viscosity, Bouzidi walls, momentum-exchange forces.
+//!   On spheres at Re 20-1e4 it was within ~5 % of the standard drag curve,
+//!   and much closer than the uniform grid at Re 1e4 for the same cost.
+//! * Spinning parts, and still parts on coarse custom grids: one uniform
+//!   D3Q19 grid (`lattice`, `shader`) with regularized collision and
+//!   Smagorinsky LES, re-voxelizing a spinning part every step. Spinning
+//!   results are a rough preview: on 3-inch props it read 30-60 % low on
+//!   thrust and 20-55 % high on torque against OpenFOAM.
 //!
 //! Study-level API: [`run`], [`run_with`], [`estimate`], [`finest_fit`],
 //! [`gpu_info`]. Lower level: [`lattice::Lattice`].
+//!
+//! Sign conventions in [`WindSummary`] (model axes, SI):
+//! * `force_n` and `moment_nm` are the air's force and moment ON the part;
+//!   the moment is about the part's bounding-box centre, or the spin centre
+//!   when spinning.
+//! * `thrust_n` = force · (+spin axis), signed.
+//! * `torque_nm` = moment · (+spin axis), signed: the AIR's torque on the
+//!   part. For a driven propeller it opposes the rotation, so with positive
+//!   rpm it is negative. The torque the motor must supply is `-torque_nm`
+//!   (that is what OpenFOAM's MRF reports); flip it once, in the caller.
+//! * `power_w` = -torque_nm × ω (ω signed by rpm), already the shaft power
+//!   the motor supplies: positive for a driven propeller. Do not flip it.
 
 #![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 

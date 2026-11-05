@@ -54,6 +54,17 @@ pub fn sphere_drag(re: f64, cells_per_d: u32, duration: f64, opt: &SolverOptions
     Ok((cd, r))
 }
 
+/// Drag coefficient of a thin disk (5 % thick) normal to a wind at `re`
+/// (based on its face area); Hoerner gives 1.17 above Re ~ 1e3.
+pub fn disk_drag(re: f64, cells_per_d: u32, duration: f64, opt: &SolverOptions, progress: &dyn Progress) -> Result<(f64, WindResult)> {
+    let (mut cfg, _) = sphere_case(re, cells_per_d);
+    cfg.duration = Some(duration);
+    let m = shapes::disk([0.0; 3], SPHERE_D, 0.05 * SPHERE_D);
+    let r = run_with(&cfg, &m, 1e-3, opt, progress)?;
+    let a = std::f64::consts::PI * SPHERE_D * SPHERE_D / 4.0;
+    Ok((r.summary.drag_n / (0.5 * cfg.air.density * SPHERE_U * SPHERE_U * a), r))
+}
+
 /// Torque on a sphere spinning in still air at rotational Reynolds number
 /// `re = omega R^2 / nu`, against Stokes' 8 pi mu R^3 omega.
 pub fn rotating_sphere(re: f64, cells_per_d: u32, revs: f64, opt: &SolverOptions, progress: &dyn Progress) -> Result<(f64, f64, WindResult)> {

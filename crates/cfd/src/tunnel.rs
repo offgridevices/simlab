@@ -28,16 +28,19 @@
 //! i.e. lattice Mach 0.13 / 0.17, and is shortened further if the viscosity
 //! would push the relaxation time past 1.
 //!
-//! Averaging and convergence: the first 4 flow passes (3 revolutions in
+//! Averaging and convergence: the first 8 flow passes (3 revolutions in
 //! still air; at most 35 % of the run) are skipped. Forces, surface pressure
 //! and slices are then averaged over a window; the run stops when the mean
 //! drag (spinning: thrust and torque) of the window's two halves agree to
-//! `tolerance` (|m2 - m1| / (|m1| + |m2|), default 0.5 %) after at least 4
-//! passes (2 revolutions). If they still drift by more than 3x that, the
-//! window restarts. Otherwise the run ends at the duration and `converged`
-//! is false.
+//! `tolerance` (|m2 - m1| / (|m1| + |m2|), default 0.5 %) and the
+//! statistical error of the window mean (from 8 block means) is below the
+//! same tolerance, after at least 10 passes (2 revolutions). If the halves
+//! still differ by more than 3x the tolerance and by far more than their
+//! noise (a real drift), the window restarts. Otherwise the run ends at
+//! the duration and `converged` is false.
 
 use crate::lattice::{FaceBc, Geometry, IDENTITY, Lattice, LatticeSetup, Probes, StepIn, Storage};
+use crate::mlattice::{LevelBox, MGeometry, MProbes, MultiLattice, MultiSetup};
 use crate::shader::SliceDef;
 use crate::voxel::{Surface, voxelize_spin, voxelize_static};
 use anyhow::{Result, bail};
@@ -46,12 +49,10 @@ use simlab_core::{Cancelled, GridQuality, Progress, TriMesh, Vec3, WindConfig, c
 use std::f64::consts::PI;
 use std::time::Instant;
 
-/// Cells across the part's largest size for each quality. Compact parts:
-/// a sphere's drag is within 1 % of the reference at 32-48 cells across, so
-/// Draft (64) is already converged for compact parts at moderate Reynolds
-/// numbers; Normal (128) and Fine (192) are for elongated parts (a frame arm
-/// gets ~1/4 of the cells across its width) and thin features. Spinning
-/// propellers are NOT converged at any of these (see the crate report).
+/// Cells across the part's largest size for each quality (on the finest
+/// grid level near a still part). Draft (64) uses two levels, Normal (128)
+/// and Fine (192) three. Spinning propellers are not converged at any of
+/// these (a rough preview only).
 pub fn cells_across(q: &GridQuality) -> u32 {
     match q {
         GridQuality::Draft => 64,
@@ -63,11 +64,66 @@ pub fn cells_across(q: &GridQuality) -> u32 {
 
 /// Default duration: flow passes over the part (wind) or revolutions (still air).
 pub fn default_duration(q: &GridQuality, still_spin: bool) -> f64 {
-    let (d, n, f) = if still_spin { (8.0, 12.0, 16.0) } else { (12.0, 20.0, 30.0) };
+    let (d, n, f) = if still_spin { (8.0, 12.0, 16.0) } else { (20.0, 40.0, 60.0) };
     match q {
         GridQuality::Draft => d,
         GridQuality::Normal | GridQuality::Custom { .. } => n,
         GridQuality::Fine => f,
+    }
+}
+
+enum Geo {
+    Old(Geometry),
+    New(MGeometry),
+}
+
+/// The solver behind a run: one uniform D3Q19 grid, or the refined D3Q27 one.
+enum Engine {
+    One(Lattice),
+    Multi(MultiLattice),
+}
+impl Engine {
+    fn run(&mut self, s: &[StepIn]) -> Result<Vec<[f64; 6]>> {
+        match self {
+            Engine::One(l) => l.run(s),
+            Engine::Multi(l) => l.run(s),
+        }
+    }
+    fn reset_samples(&mut self) {
+        match self {
+            Engine::One(l) => l.reset_samples(),
+            Engine::Multi(l) => l.reset_samples(),
+        }
+    }
+    fn vertex_means(&self) -> Result<Vec<f32>> {
+        match self {
+            Engine::One(l) => l.vertex_means(),
+            Engine::Multi(l) => l.vertex_means(),
+        }
+    }
+    fn slice_means(&self) -> Result<Vec<[f32; 4]>> {
+        match self {
+            Engine::One(l) => l.slice_means(),
+            Engine::Multi(l) => l.slice_means(),
+        }
+    }
+    fn sub_steps(&self) -> u64 {
+        match self {
+            Engine::One(_) => 1,
+            Engine::Multi(l) => l.sub_steps() as u64,
+        }
+    }
+    fn storage(&self) -> Storage {
+        match self {
+            Engine::One(l) => l.setup.storage,
+            Engine::Multi(l) => l.setup.storage,
+        }
+    }
+    fn memory_bytes(&self) -> u64 {
+        match self {
+            Engine::One(l) => l.memory_bytes,
+            Engine::Multi(l) => l.memory_bytes,
+        }
     }
 }
 
@@ -81,6 +137,8 @@ pub fn max_cells_layout(s: Storage) -> u64 {
 /// Measured on an M4 Max (40-core GPU); used for time estimates.
 pub const MLUPS_FP32: f64 = 2800.0;
 pub const MLUPS_FP16: f64 = 4500.0;
+/// The refined D3Q27 solver (cell updates per second, all levels), M4 Max.
+pub const MLUPS_REFINED: f64 = 1400.0;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Margins {
@@ -125,6 +183,8 @@ pub struct SolverOptions {
     pub total_pressure_inlet: bool,
     /// Spalding wall model in the first fluid cell (for boundary layers thinner than a cell)
     pub wall_model: bool,
+    /// still parts: the refined D3Q27 cumulant solver (false: one uniform D3Q19 grid)
+    pub refine: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -158,6 +218,7 @@ impl Default for SolverOptions {
             // 0.18 to 0.21 (reference 0.44), and it destabilised a 3-inch prop
             // at 128 cells after ~3 revolutions
             wall_model: false,
+            refine: true,
         }
     }
 }
@@ -292,6 +353,33 @@ struct Plan {
     box_lo: [i32; 3],
     box_n: [u32; 3],
     est_records: u64,
+    /// refined grid (still parts): coarsest dims, nested boxes, finest-level
+    /// origin in global finest coordinates, cells per level
+    multi: Option<MultiPlan>,
+    /// cell updates per finest time step (all levels)
+    updates_per_step: f64,
+}
+
+#[derive(Clone, Debug)]
+struct MultiPlan {
+    dims0: [u32; 3],
+    boxes: Vec<LevelBox>,
+    org_f: [f64; 3],
+    cells: Vec<u64>,
+}
+
+/// Nested refinement around the part, beyond its bounding box, in frontal
+/// sizes: (upstream, downstream, sideways) for levels 1, 2, 3.
+const REFINE_EXT: [(f64, f64, f64); 3] = [(1.2, 3.0, 1.0), (0.8, 1.6, 0.75), (0.65, 1.0, 0.65)];
+
+/// Levels for a still part: the coarsest level keeps at least 24 cells
+/// across the part's largest size; at most 4 levels.
+fn still_levels(cells_across: u32) -> usize {
+    let mut nl = 1;
+    while nl < 4 && cells_across as f64 / (1u64 << nl) as f64 >= 24.0 {
+        nl += 1;
+    }
+    nl
 }
 
 fn mat_vec(r: &[Vec3; 3], v: Vec3) -> Vec3 {
@@ -424,7 +512,53 @@ fn plan(cfg: &WindConfig, m: &TriMesh, unit_m: f64, opt: &SolverOptions, budget:
     for k in 0..3 {
         dims[k] = ((dom_hi[k] - dom_lo[k]) / dx).ceil() as u32 + 1;
     }
-    let center = [-dom_lo[0] / dx, -dom_lo[1] / dx, -dom_lo[2] / dx];
+    let dims_uniform = dims;
+    let mut center = [-dom_lo[0] / dx, -dom_lo[1] / dx, -dom_lo[2] / dx];
+    // still parts: nested refinement (the finest level holds the part)
+    let mut multi: Option<MultiPlan> = None;
+    if spin.is_none() && opt.refine {
+        let nl = still_levels(n_across);
+        if nl > 1 {
+            let s0 = (1u64 << (nl - 1)) as f64;
+            let dx0 = dx * s0;
+            let mut dims0 = [0u32; 3];
+            for k in 0..3 {
+                dims0[k] = ((dom_hi[k] - dom_lo[k]) / dx0).ceil() as u32 + 1;
+                dims[k] = ((dims0[k] - 1) as f64 * s0) as u32 + 1;
+            }
+            center = [-dom_lo[0] / dx, -dom_lo[1] / dx, -dom_lo[2] / dx];
+            let mut lo_c = [(center[0] + lo[0] / dx) / s0, (center[1] + lo[1] / dx) / s0, (center[2] + lo[2] / dx) / s0];
+            let mut hi_c = [(center[0] + hi[0] / dx) / s0, (center[1] + hi[1] / dx) / s0, (center[2] + hi[2] / dx) / s0];
+            let mut pd = dims0;
+            let mut boxes = Vec::new();
+            let mut org = [0f64; 3];
+            let mut cells = vec![dims0.iter().map(|&d| d as u64).product::<u64>()];
+            for l in 1..nl {
+                let sc = (1u64 << (nl - l)) as f64; // finest cells per level (l-1) cell
+                let df = d_front / dx / sc;
+                let (eu, ed, es) = REFINE_EXT[l - 1];
+                let e_lo = [eu * df, es * df, es * df];
+                let e_hi = [ed * df, es * df, es * df];
+                let mut blo = [0i32; 3];
+                let mut bn = [0u32; 3];
+                for k in 0..3 {
+                    let a = ((lo_c[k] - e_lo[k]).floor() as i32).max(3);
+                    let b = ((hi_c[k] + e_hi[k]).ceil() as i32).min(pd[k] as i32 - 4);
+                    blo[k] = a;
+                    bn[k] = (b - a + 1).max(8) as u32;
+                }
+                for k in 0..3 {
+                    org[k] += blo[k] as f64 * sc;
+                    lo_c[k] = 2.0 * (lo_c[k] - blo[k] as f64);
+                    hi_c[k] = 2.0 * (hi_c[k] - blo[k] as f64);
+                    pd[k] = 2 * (bn[k] - 1) + 1;
+                }
+                cells.push(pd.iter().map(|&d| d as u64).product::<u64>());
+                boxes.push(LevelBox { lo: blo, n: bn });
+            }
+            multi = Some(MultiPlan { dims0, boxes, org_f: org, cells });
+        }
+    }
 
     // time step from the Mach limit, then the viscosity limit
     let omega = spin.map(|s| s.rpm * 2.0 * PI / 60.0).unwrap_or(0.0);
@@ -463,7 +597,24 @@ fn plan(cfg: &WindConfig, m: &TriMesh, unit_m: f64, opt: &SolverOptions, budget:
     let faces_cells = 2 * (dims[0] as u64 * dims[1] as u64 + dims[1] as u64 * dims[2] as u64 + dims[0] as u64 * dims[2] as u64);
     let mem_for = |s: Storage| n * s.bytes_per_cell() + est_records * crate::shader::RS as u64 * 4 + faces_cells * 44 + 64 * 1024 * 1024;
     let budget = budget.or(opt.memory_budget);
-    let fits_layout = |s: Storage| n <= max_cells_layout(s);
+    let mem_for = |s: Storage| -> u64 {
+        match &multi {
+            Some(mp) => {
+                let pops: u64 = mp.cells.iter().map(|&c| c * (2 * 27 * s.pop_bytes() + 4 + 8)).sum();
+                pops + est_records * crate::mshader::RS as u64 * 4 * 2 + 64 * 1024 * 1024
+            }
+            None => mem_for(s),
+        }
+    };
+    let n = match &multi {
+        Some(mp) => mp.cells.iter().copied().max().unwrap_or(n),
+        None => n,
+    };
+    let fits_layout = |s: Storage| match &multi {
+        // A and B copies, at most 6 buffers per level for 27 directions
+        Some(_) => n * 2 * s.pop_bytes() * 5 <= (1u64 << 32) - 256,
+        None => n <= max_cells_layout(s),
+    };
     let storage = match opt.storage {
         Some(s) => s,
         None => match budget {
@@ -476,7 +627,13 @@ fn plan(cfg: &WindConfig, m: &TriMesh, unit_m: f64, opt: &SolverOptions, budget:
     let memory = if layout_ok { mem_for(storage) } else { u64::MAX / 4 };
     let frontal = if still { PI * rotor_radius * rotor_radius } else { frontal_area(m, &r) };
     let blockage = frontal / ((dom_hi[1] - dom_lo[1]) * (dom_hi[2] - dom_lo[2]));
-    let cl = |x: f64, lo: u32| -> u32 { (x / dx).round().max(lo as f64) as u32 };
+    // sponge widths in cells of the coarsest level
+    let dxs = match &multi {
+        Some(mp) => dx * ((dims[0] - 1) as f64 / (mp.dims0[0] - 1) as f64),
+        None => dx,
+    };
+    let cl = |x: f64, lo: u32| -> u32 { (x / dxs).round().max(lo as f64) as u32 };
+    let _ = dims_uniform;
     let (sponge, faces) = if still {
         let s = cl(opt.sponge_widths[2] * d_front, 8);
         ([s; 6], [FaceBc::Open; 6])
@@ -513,6 +670,14 @@ fn plan(cfg: &WindConfig, m: &TriMesh, unit_m: f64, opt: &SolverOptions, budget:
         box_lo,
         box_n,
         est_records,
+        updates_per_step: match &multi {
+            Some(mp) => {
+                let nl = mp.cells.len();
+                mp.cells.iter().enumerate().map(|(l, &c)| c as f64 * (1u64 << l) as f64).sum::<f64>() / (1u64 << (nl - 1)) as f64
+            }
+            None => dims.iter().map(|&d| d as f64).product(),
+        },
+        multi,
     })
 }
 
@@ -524,15 +689,26 @@ pub fn estimate(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, budget_b
 
 pub fn estimate_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, budget_bytes: u64, opt: &SolverOptions) -> Result<Estimate> {
     let p = plan(cfg, surface, model_unit_m, opt, Some(budget_bytes))?;
-    let cells = p.dims.iter().map(|&d| d as u64).product::<u64>();
+    let cells = match &p.multi {
+        Some(mp) => mp.cells.iter().sum(),
+        None => p.dims.iter().map(|&d| d as u64).product::<u64>(),
+    };
     let steps = (p.duration * p.steps_unit).ceil() as u64;
-    let mlups = if p.storage == Storage::Fp16 { MLUPS_FP16 } else { MLUPS_FP32 };
-    let seconds = steps as f64 * cells as f64 / (mlups * 1e6) * if p.spin { 1.15 } else { 1.0 } + 2.0 + p.est_records as f64 * 2e-6;
+    let mlups = match (&p.multi, p.storage) {
+        (Some(_), _) => MLUPS_REFINED,
+        (None, Storage::Fp16) => MLUPS_FP16,
+        (None, Storage::Fp32) => MLUPS_FP32,
+    };
+    let seconds = steps as f64 * p.updates_per_step / (mlups * 1e6) * if p.spin { 1.15 } else { 1.0 } + 2.0 + p.est_records as f64 * 2e-6;
     let fits = p.memory <= budget_bytes;
     let note = format!(
-        "{} cells across the part ({:.2} mm cells), {} x {} x {} grid, {} storage, {:.0} {}",
+        "{} cells across the part ({:.2} mm cells{}), {} x {} x {} grid, {} storage, {:.0} {}",
         p.cells_across,
         p.dx * 1e3,
+        match &p.multi {
+            Some(mp) => format!(" near it, {} grid levels", mp.cells.len()),
+            None => String::new(),
+        },
         p.dims[0],
         p.dims[1],
         p.dims[2],
@@ -540,6 +716,7 @@ pub fn estimate_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, bud
         p.duration,
         if p.still { "revolutions" } else { "flow passes" }
     );
+    let _ = mlups;
     Ok(Estimate { fits, cells, grid: p.dims, cells_across: p.cells_across, memory_bytes: p.memory, budget_bytes, storage: p.storage, steps, seconds, note })
 }
 
@@ -594,7 +771,17 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
         let vox = voxelize_spin(&s, p.axis_lat, h);
         let solid_cells = vox.occ_bits.iter().map(|b| b.count_ones() as f64).sum::<f64>() * vox.occ_h.powi(3);
         check_thin(&mut warnings, solid_cells, surface, p.dx);
-        Geometry::Spin { vox, box_lo: p.box_lo, box_n: p.box_n }
+        Geo::Old(Geometry::Spin { vox, box_lo: p.box_lo, box_n: p.box_n })
+    } else if let Some(mp) = &p.multi {
+        let fd = {
+            let b = mp.boxes.last().unwrap();
+            [2 * (b.n[0] - 1) + 1, 2 * (b.n[1] - 1) + 1, 2 * (b.n[2] - 1) + 1]
+        };
+        let o = mp.org_f;
+        let s = Surface { verts: surface.positions.iter().map(|v| { let x = to_lat(*v); [x[0] - o[0], x[1] - o[1], x[2] - o[2]] }).collect(), tris: surface.triangles.clone() };
+        let vox = crate::voxel::voxelize_static27(&s, [fd[0] as usize, fd[1] as usize, fd[2] as usize]);
+        check_thin(&mut warnings, vox.solid.len() as f64, surface, p.dx);
+        Geo::New(MGeometry::Static(vox))
     } else {
         let s = Surface { verts: surface.positions.iter().map(|v| to_lat(*v)).collect(), tris: surface.triangles.clone() };
         let vox = voxelize_static(&s, [p.dims[0] as usize, p.dims[1] as usize, p.dims[2] as usize]);
@@ -604,7 +791,7 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
             for w in &vox.walls { for d in 1..19 { if w.mask & (1 << d) != 0 { cnt[d] += 1; } } }
             eprintln!("plan: dims {:?} center {:?} dx {} sponge {:?} solid {} walls {} counts {:?}", p.dims, p.center, p.dx, p.sponge, vox.solid.len(), vox.walls.len(), &cnt[1..]);
         }
-        Geometry::Static(vox)
+        Geo::Old(Geometry::Static(vox))
     };
     if progress.cancelled() {
         return Err(Cancelled.into());
@@ -627,54 +814,108 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
         .map(|(v, nn)| (to_body(*v), mat_vec(&p.r, scale(normalize(*nn), flip))))
         .collect();
     let [nx, ny, nz] = p.dims;
-    let (xc, yc) = (p.center[0].round().clamp(1.0, nx as f64 - 2.0) as i32, p.center[1].round().clamp(1.0, ny as f64 - 2.0) as i32);
-    let slices = vec![
-        SliceDef { origin: [1, yc, 1], u: [1, 0, 0], v: [0, 0, 1], nu: nx - 2, nv: nz - 2 },
-        SliceDef { origin: [xc, 1, 1], u: [0, 1, 0], v: [0, 0, 1], nu: ny - 2, nv: nz - 2 },
-    ];
-    let probes = Probes { verts, slices: slices.clone(), vertex_offset: opt.vertex_offset };
-    let u_inf = [p.u_lat, 0.0, 0.0];
-    let setup = LatticeSetup {
-        dims: p.dims,
-        faces: p.faces,
-        nu: p.nu_lat,
-        smagorinsky: opt.smagorinsky,
-        u_inf,
-        u_init: u_inf,
-        body_force: [0.0; 3],
-        sponge: p.sponge,
-        sponge_tau: 1.0,
-        sponge_sigma: opt.sponge_sigma,
-        absorb_velocity: opt.absorb_velocity && !p.still,
-        total_pressure_inlet: opt.total_pressure_inlet,
-        storage: p.storage,
-        center: p.center,
-        debug_dump: false,
-        wall_model: opt.wall_model,
+    // slices through the part centre (global finest-cell coordinates); on a
+    // refined grid each pixel takes the finest level covering it, with a
+    // pitch that keeps a slice under ~4 M pixels
+    let pitch: i32 = if p.multi.is_some() {
+        let mut pt = 1i32;
+        while ((nx as u64 / pt as u64) * (nz as u64 / pt as u64)).max((ny as u64 / pt as u64) * (nz as u64 / pt as u64)) > 4_000_000 {
+            pt *= 2;
+        }
+        pt
+    } else {
+        1
     };
+    let snap = |x: f64| -> i32 { ((x / pitch as f64).round() as i32 * pitch).max(pitch) };
+    let (xc, yc) = (snap(p.center[0].clamp(1.0, nx as f64 - 2.0)), snap(p.center[1].clamp(1.0, ny as f64 - 2.0)));
+    let span = |n: u32| -> u32 { ((n as i32 - 1 - pitch) / pitch).max(1) as u32 };
+    // (origin, u, v, nu, nv)
+    let slices: Vec<([i32; 3], [i32; 3], [i32; 3], u32, u32)> = vec![
+        ([pitch, yc, pitch], [pitch, 0, 0], [0, 0, pitch], span(nx), span(nz)),
+        ([xc, pitch, pitch], [0, pitch, 0], [0, 0, pitch], span(ny), span(nz)),
+    ];
+    let u_inf = [p.u_lat, 0.0, 0.0];
     progress.report(0.01, "Preparing the GPU");
-    let mut lat = Lattice::new(setup, geom, probes)?;
-    if lat.setup.storage != p.storage {
+    let mut lat = match geom {
+        Geo::Old(g) => {
+            let probes = Probes {
+                verts,
+                slices: slices.iter().map(|s| SliceDef { origin: s.0, u: s.1, v: s.2, nu: s.3, nv: s.4 }).collect(),
+                vertex_offset: opt.vertex_offset,
+            };
+            let setup = LatticeSetup {
+                dims: p.dims,
+                faces: p.faces,
+                nu: p.nu_lat,
+                smagorinsky: opt.smagorinsky,
+                u_inf,
+                u_init: u_inf,
+                body_force: [0.0; 3],
+                sponge: p.sponge,
+                sponge_tau: 1.0,
+                sponge_sigma: opt.sponge_sigma,
+                absorb_velocity: opt.absorb_velocity && !p.still,
+                total_pressure_inlet: opt.total_pressure_inlet,
+                storage: p.storage,
+                center: p.center,
+                debug_dump: false,
+                wall_model: opt.wall_model,
+            };
+            Engine::One(Lattice::new(setup, g, probes)?)
+        }
+        Geo::New(g) => {
+            let mp = p.multi.as_ref().unwrap();
+            let nl = mp.cells.len();
+            let probes = MProbes {
+                verts,
+                vertex_offset: opt.vertex_offset,
+                slices: slices.iter().map(|s| (crate::mshader::SliceDef { origin: s.0, u: s.1, v: s.2, nu: s.3, nv: s.4 }, pitch as u32)).collect(),
+            };
+            let setup = MultiSetup {
+                dims0: mp.dims0,
+                boxes: mp.boxes.clone(),
+                faces: p.faces,
+                nu0: p.nu_lat / (1u64 << (nl - 1)) as f64,
+                smagorinsky: 0.0,
+                u_inf,
+                u_init: u_inf,
+                body_force0: [0.0; 3],
+                sponge: p.sponge,
+                sponge_tau: 1.0,
+                sponge_sigma: opt.sponge_sigma,
+                absorb_velocity: opt.absorb_velocity,
+                total_pressure_inlet: opt.total_pressure_inlet,
+                storage: p.storage,
+                center: [p.center[0] - mp.org_f[0], p.center[1] - mp.org_f[1], p.center[2] - mp.org_f[2]],
+                debug_dump: false,
+            };
+            Engine::Multi(MultiLattice::new(setup, g, probes)?)
+        }
+    };
+    if lat.storage() != p.storage {
         warnings.push("this GPU has no half-precision storage; used FP32".into());
     }
-    if lat.setup.storage == Storage::Fp16 {
+    if lat.storage() == Storage::Fp16 {
         warnings.push("FP16 storage (to fit the memory budget): slightly noisier forces".into());
     }
     let t_setup = t_start.elapsed().as_secs_f64();
 
     // time loop
-    let total_steps = (p.duration * p.steps_unit).ceil() as u64;
+    let ss = lat.sub_steps();
+    let total_steps = ((p.duration * p.steps_unit).ceil() as u64).div_ceil(ss) * ss;
     let omega_mag = norm(p.omega_lat);
     let ramp_steps = if p.spin { (opt.spin_ramp_revs * 2.0 * PI / omega_mag).ceil() as u64 } else { 0 };
     let unit_steps = p.steps_unit;
-    let (tr_units, min_win_units): (f64, f64) = if p.still { (3.0, 2.0) } else { (4.0, 4.0) };
+    // wind: skip 8 flow passes, then average at least 10 (a chaotic wake at
+    // Re >= 1000 needs ~10+ passes per half-window for a ~2 % mean)
+    let (tr_units, min_win_units): (f64, f64) = if p.still { (3.0, 2.0) } else { (8.0, 10.0) };
     let mut w0 = (tr_units.min(0.35 * p.duration) * unit_steps) as u64;
     w0 = w0.max(ramp_steps + (0.5 * unit_steps) as u64);
     let min_win = (min_win_units.min(0.3 * p.duration) * unit_steps) as u64;
     // short runs still average over their second half
     w0 = w0.min(total_steps / 2);
     let sample_every = ((unit_steps / 100.0).floor() as u64).max(1);
-    let batch = ((0.25 * MLUPS_FP32 * 1e6 / n as f64) as u64).clamp(16, 4096);
+    let batch = (((0.25 * MLUPS_FP32 * 1e6 / p.updates_per_step) as u64).clamp(16, 4096)).div_ceil(ss) * ss;
 
     let mut hist: Vec<[f64; 6]> = Vec::with_capacity(total_steps as usize);
     let mut theta = 0.0f64;
@@ -736,7 +977,7 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
             progress.metric("lift_n", step, dot(f_model, p.r[2]));
         }
         let el = t_loop.elapsed().as_secs_f64();
-        let mlups = (step as f64 * n as f64) / el / 1e6;
+        let mlups = (step as f64 * p.updates_per_step) / el / 1e6;
         progress.report(
             0.02 + 0.96 * (step as f32 / total_steps as f32),
             &format!("Solving: {step} of {total_steps} steps ({:.1} {}, {:.0} MLUPs)", tu, if p.still { "revolutions" } else { "flow passes" }, mlups),
@@ -761,15 +1002,28 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
             };
             let nsig = if p.spin { 2 } else { 1 };
             let mut worst: f64 = 0.0;
+            // statistical error of the window mean, from 8 block means: a
+            // chaotic wake can make the two halves agree by chance
+            let mut se_rel: f64 = 0.0;
+            let mut trend = false;
             for which in 0..nsig {
                 let m1: f64 = w[..half].iter().map(|v| signal(v, which)).sum::<f64>() / half as f64;
                 let m2: f64 = w[half..].iter().map(|v| signal(v, which)).sum::<f64>() / (w.len() - half) as f64;
                 let sc = 0.5 * (m1.abs() + m2.abs());
+                let nbk = 8usize;
+                let bl = w.len() / nbk;
+                let bm: Vec<f64> = (0..nbk).map(|k| w[k * bl..(k + 1) * bl].iter().map(|v| signal(v, which)).sum::<f64>() / bl as f64).collect();
+                let mm = bm.iter().sum::<f64>() / nbk as f64;
+                let sd = (bm.iter().map(|b| (b - mm) * (b - mm)).sum::<f64>() / (nbk - 1) as f64).sqrt();
+                let se = sd / (nbk as f64).sqrt();
                 if sc > 0.0 {
                     worst = worst.max((m2 - m1).abs() / 2.0 / sc);
+                    se_rel = se_rel.max(se / sc);
+                    // a real drift: halves differ by far more than their noise
+                    trend |= (m2 - m1).abs() > 6.0 * se;
                 }
             }
-            if worst < opt.tolerance {
+            if worst < opt.tolerance && se_rel < opt.tolerance {
                 converged = true;
                 break;
             }
@@ -777,14 +1031,14 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
             // slice sums restart now, so they cover the newest part of it);
             // never in the last 30 % of the run, so the final average keeps
             // a long window
-            if worst > 3.0 * opt.tolerance && w.len() as u64 >= 2 * min_win && (step as f64) < 0.7 * total_steps as f64 {
+            if worst > 3.0 * opt.tolerance && trend && w.len() as u64 >= 2 * min_win && (step as f64) < 0.7 * total_steps as f64 {
                 w0 += half as u64;
                 lat.reset_samples();
             }
         }
     }
     let loop_s = t_loop.elapsed().as_secs_f64();
-    let mlups = step as f64 * n as f64 / loop_s / 1e6;
+    let mlups = step as f64 * p.updates_per_step / loop_s / 1e6;
 
     // averages over the window
     let w = &hist[(w0 as usize).min(hist.len().saturating_sub(1))..];
@@ -841,16 +1095,19 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
         let q = [(x[0] - p.center[0]) * p.dx, (x[1] - p.center[1]) * p.dx, (x[2] - p.center[2]) * p.dx];
         simlab_core::add(p.pref, mat_t_vec(&p.r, q))
     };
-    for (si, sd) in slices.iter().enumerate() {
-        let np = (sd.nu * sd.nv) as usize;
+    for (si, &(s_origin, s_u, s_v, s_nu, s_nv)) in slices.iter().enumerate() {
+        let np = (s_nu * s_nv) as usize;
         let px = &sm[off..off + np];
         off += np;
-        let ua = [sd.u[0] as f64, sd.u[1] as f64, sd.u[2] as f64];
-        let va = [sd.v[0] as f64, sd.v[1] as f64, sd.v[2] as f64];
-        let corner = [sd.origin[0] as f64 - 0.5 * (ua[0] + va[0]), sd.origin[1] as f64 - 0.5 * (ua[1] + va[1]), sd.origin[2] as f64 - 0.5 * (ua[2] + va[2])];
+        // step vectors (one pixel, finest cells) and unit axes
+        let su = [s_u[0] as f64, s_u[1] as f64, s_u[2] as f64];
+        let sv = [s_v[0] as f64, s_v[1] as f64, s_v[2] as f64];
+        let ua = normalize(su);
+        let va = normalize(sv);
+        let corner = [s_origin[0] as f64 - 0.5 * (su[0] + sv[0]), s_origin[1] as f64 - 0.5 * (su[1] + sv[1]), s_origin[2] as f64 - 0.5 * (su[2] + sv[2])];
         let origin = lat_to_model(corner);
-        let u_mm = to_mm(scale(mat_t_vec(&p.r, ua), sd.nu as f64 * p.dx));
-        let v_mm = to_mm(scale(mat_t_vec(&p.r, va), sd.nv as f64 * p.dx));
+        let u_mm = to_mm(scale(mat_t_vec(&p.r, su), s_nu as f64 * p.dx));
+        let v_mm = to_mm(scale(mat_t_vec(&p.r, sv), s_nv as f64 * p.dx));
         let mut speedf = Vec::with_capacity(np);
         let mut pres = Vec::with_capacity(np);
         let mut uin = Vec::with_capacity(np);
@@ -883,8 +1140,8 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
             origin_mm: to_mm(origin),
             u_mm,
             v_mm,
-            nu: sd.nu,
-            nv: sd.nv,
+            nu: s_nu,
+            nv: s_nv,
             fields: vec![
                 mk("speed", "Air speed", "m/s", speedf),
                 mk("pressure", "Pressure (relative to far field)", "Pa", pres),
@@ -913,11 +1170,18 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
     let simulated = step as f64 / unit_steps;
     let averaged = (step.saturating_sub(w0)) as f64 / unit_steps;
     let headline = if let (Some(t), Some(tq), Some(pw)) = (thrust, torque, power) {
-        format!("Thrust {:.2} N ({:.0} g), torque {:.1} mN·m, {:.0} W at {:.0} rpm", t.abs(), t.abs() / 9.80665e-3, tq.abs() * 1e3, pw.abs(), spin.unwrap().rpm.abs())
+        format!(
+            "Thrust {} N ({} g), torque {} mN·m, {} W at {} rpm",
+            sig(t.abs(), 3),
+            sig(t.abs() / 9.80665e-3, 3),
+            sig(tq.abs() * 1e3, 3),
+            sig(pw.abs(), 3),
+            sig(spin.unwrap().rpm.abs(), 4)
+        )
     } else if let Some(c) = cd {
-        format!("Drag {:.3} N at {:.1} m/s (Cd {:.2})", drag, speed, c)
+        format!("Drag {} N at {} m/s (Cd {})", sig(drag, 3), sig(speed, 3), sig(c, 3))
     } else {
-        format!("Drag {:.3} N at {:.1} m/s", drag, speed)
+        format!("Drag {} N at {} m/s", sig(drag, 3), sig(speed, 3))
     };
     let _ = t_setup;
     let summary = WindSummary {
@@ -934,7 +1198,10 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
         torque_nm: torque,
         power_w: power,
         reynolds,
-        cells: n,
+        cells: match &p.multi {
+            Some(mp) => mp.cells.iter().sum(),
+            None => n,
+        },
         steps: step,
         mlups,
         seconds,
@@ -947,14 +1214,26 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
         mach_lattice: (p.u_lat + norm(p.omega_lat) * p.rotor_radius / p.dx) * 3f64.sqrt(),
         tau: tau0,
         blockage: p.blockage,
-        storage: lat.setup.storage,
-        memory_bytes: lat.memory_bytes,
+        storage: lat.storage(),
+        memory_bytes: lat.memory_bytes(),
         averaged_over: averaged,
         simulated,
         time_unit: if p.still { "revolutions".into() } else { "passes".into() },
         q_ref_pa: q_ref,
     };
     Ok(WindResult { summary, surface_pressure_pa, surface_cp, slices: out_slices, history: history_out })
+}
+
+/// `x` with `n` significant figures, plain decimal notation (no exponent).
+pub fn sig(x: f64, n: i32) -> String {
+    if x == 0.0 || !x.is_finite() {
+        return format!("{x}");
+    }
+    let mag = x.abs().log10().floor() as i32;
+    let decimals = (n - 1 - mag).max(0) as usize;
+    let factor = 10f64.powi(n - 1 - mag);
+    let rounded = (x * factor).round() / factor;
+    format!("{rounded:.decimals$}")
 }
 
 fn check_thin(warnings: &mut Vec<String>, solid_cells: f64, m: &TriMesh, dx: f64) {

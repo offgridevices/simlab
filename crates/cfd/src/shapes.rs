@@ -19,6 +19,31 @@ pub fn cuboid(lo: Vec3, hi: Vec3) -> TriMesh {
     TriMesh { positions, triangles, patch }
 }
 
+/// Thin circular disk of diameter `d` and thickness `t`, axis along x.
+pub fn disk(center: Vec3, d: f64, t: f64) -> TriMesh {
+    let n = 96usize;
+    let mut m = TriMesh::default();
+    for side in [-0.5, 0.5] {
+        for k in 0..n {
+            let a = 2.0 * PI * k as f64 / n as f64;
+            m.positions.push([center[0] + side * t, center[1] + 0.5 * d * a.cos(), center[2] + 0.5 * d * a.sin()]);
+        }
+        m.positions.push([center[0] + side * t, center[1], center[2]]);
+    }
+    let (c0, c1) = (n as u32, 2 * n as u32 + 1);
+    for k in 0..n as u32 {
+        let k1 = (k + 1) % n as u32;
+        let (a2, b2) = (k + n as u32 + 1, k1 + n as u32 + 1);
+        m.triangles.push([c0, k1, k]);
+        m.triangles.push([c1, a2, b2]);
+        m.triangles.push([k, k1, b2]);
+        m.triangles.push([k, b2, a2]);
+    }
+    m.patch = vec![0; m.triangles.len()];
+    fix_orientation(&mut m);
+    m
+}
+
 /// Geodesic sphere (subdivided icosahedron), outward-facing.
 pub fn sphere(center: Vec3, radius: f64, subdiv: u32) -> TriMesh {
     let t = (1.0 + 5f64.sqrt()) / 2.0;

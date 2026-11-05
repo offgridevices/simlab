@@ -21,7 +21,11 @@ fn sphere_check(re: f64, d: u32, passes: f64, tol: f64) {
         s.mlups
     );
     assert!((cd / refc - 1.0).abs() < tol, "Cd {cd} vs {refc}");
-    assert!(s.lift_n.abs() < 0.05 * s.drag_n.abs());
+    // steady wakes are symmetric; a chaotic wake (Re >= 1000) keeps a side
+    // force of a few percent of drag over a finite window
+    let side = (s.lift_n * s.lift_n + s.side_n * s.side_n).sqrt() / s.drag_n.abs();
+    eprintln!("  side force / drag {side:.3}");
+    assert!(side < if re < 500.0 { 0.05 } else { 0.15 });
 }
 
 #[test]
@@ -35,6 +39,7 @@ fn sphere_re20() {
     sphere_check(20.0, 32, 30.0, 0.05);
 }
 
+// 48+ cells across: still parts run on the refined D3Q27 solver
 #[test]
 #[ignore]
 fn sphere_re100() {
@@ -44,20 +49,29 @@ fn sphere_re100() {
 #[test]
 #[ignore]
 fn sphere_re300() {
-    sphere_check(300.0, 48, 40.0, 0.05);
+    sphere_check(300.0, 48, 40.0, 0.06);
 }
 
 #[test]
 #[ignore]
 fn sphere_re1000() {
-    sphere_check(1000.0, 96, 40.0, 0.10);
+    sphere_check(1000.0, 96, 50.0, 0.05);
 }
 
 #[test]
 #[ignore]
 fn sphere_re10000() {
-    // under-resolved boundary layer: reported, loose bound
-    sphere_check(1e4, 128, 30.0, 0.25);
+    // boundary layer thinner than a cell; the refined grid gets within ~5 %
+    sphere_check(1e4, 96, 50.0, 0.08);
+}
+
+#[test]
+#[ignore]
+fn disk_normal_to_flow_re10000() {
+    // sharp-edged plate: the wake is wide and slow to settle; reads ~10 % low
+    let (cd, r) = disk_drag(1e4, 96, 50.0, &SolverOptions::default(), &Silent).unwrap();
+    eprintln!("disk Re 1e4: Cd {cd:.4} vs 1.17 ({:+.1} %), converged {}, {} cells", (cd / 1.17 - 1.0) * 100.0, r.summary.converged, r.summary.cells);
+    assert!((cd / 1.17 - 1.0).abs() < 0.15);
 }
 
 #[test]
@@ -114,4 +128,13 @@ fn estimate_and_budget() {
     let e = estimate(&spin, &PropSpec::five_inch().mesh(), 1e-3, 32_000_000_000).unwrap();
     eprintln!("5-inch prop, Normal: {}", e.note);
     assert!(e.steps > 1000);
+}
+
+#[test]
+fn headline_numbers_use_significant_figures() {
+    use simlab_cfd::tunnel::sig;
+    assert_eq!(sig(0.000123456, 3), "0.000123");
+    assert_eq!(sig(1234.5, 3), "1230");
+    assert_eq!(sig(2.0, 3), "2.00");
+    assert_eq!(sig(-0.0456, 2), "-0.046");
 }

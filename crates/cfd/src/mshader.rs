@@ -23,10 +23,11 @@
 //! non-equilibrium stress is rescaled between levels (Dupuis & Chopard
 //! 2003) so the physical stress is continuous.
 //!
-//! Walls: Bouzidi linear interpolated bounce-back with the moving-wall term;
-//! Galilean-invariant momentum exchange for forces.
+//! Walls: Bouzidi linear interpolated bounce-back; Galilean-invariant
+//! momentum exchange for forces. Used for still parts (spinning parts stay
+//! on the D3Q19 solver in `shader`).
 
-use crate::d3q27::{Q, REST, c, canon_idx, canonical, opp, slot, weight};
+use crate::d3q27::{Q, REST, c, opp, slot, weight};
 
 pub const RS: u32 = 24;
 pub const R_MASK: u32 = 0;
@@ -76,14 +77,7 @@ pub struct LevelShader {
     pub grav: [f64; 3],
     /// moment reference / spin centre, this level's lattice coordinates
     pub center: [f64; 3],
-    pub moving: bool,
     pub nrec: u32,
-    pub box_lo: [i32; 3],
-    pub box_n: [u32; 3],
-    pub occ_lo: [f64; 3],
-    pub occ_h: f64,
-    pub occ_n: [u32; 3],
-    pub ntri: u32,
     /// child box (node range lo .. lo + n - 1 in this level's coordinates)
     pub child: Option<([i32; 3], [u32; 3])>,
     pub has_parent: bool,
@@ -94,7 +88,6 @@ pub struct LevelShader {
     pub vertex_offset: f64,
     pub npix: u32,
     pub hist_off: u32,
-    pub wall_model: bool,
 }
 
 fn fl(x: f64) -> String {
@@ -111,18 +104,6 @@ fn nb_expr(d: [i32; 3]) -> String {
     };
     format!("(({} * NY + {}) * NX + {})", ax(d[2], "z"), ax(d[1], "y"), ax(d[0], "x"))
 }
-fn cdot(cv: [i32; 3], v: &str) -> String {
-    let mut t = String::new();
-    for (k, comp) in ["x", "y", "z"].iter().enumerate() {
-        match cv[k] {
-            1 => t += &format!(" + {v}.{comp}"),
-            -1 => t += &format!(" - {v}.{comp}"),
-            _ => {}
-        }
-    }
-    if t.is_empty() { "0.0".into() } else { format!("(0.0{t})") }
-}
-
 const PRELUDE_NB: &str = "  let x = xyz.x; let y = xyz.y; let z = xyz.z;\n\
   let xp = select(x + 1u, 0u, x == NX - 1u); let xm = select(x - 1u, NX - 1u, x == 0u);\n\
   let yp = select(y + 1u, 0u, y == NY - 1u); let ym = select(y - 1u, NY - 1u, y == 0u);\n\
@@ -173,20 +154,7 @@ impl LevelShader {
         s += &format!("const SP_LO: vec3<f32> = {};\nconst SP_HI: vec3<f32> = {};\n", v3(self.sponge_lo), v3(self.sponge_hi));
         s += &format!("const ABS_U: bool = {};\nconst TOTAL_P: bool = {};\n", self.absorb_velocity, self.total_p);
         s += &format!("const U_INF: vec3<f32> = {};\nconst U_INIT: vec3<f32> = {};\nconst GRAV: vec3<f32> = {};\nconst CENTER: vec3<f32> = {};\n", v3(self.u_inf), v3(self.u_init), v3(self.grav), v3(self.center));
-        s += &format!("const MOVING: bool = {};\nconst NREC: u32 = {}u;\nconst NPART: u32 = {}u;\n", self.moving, self.nrec, self.nrec.max(1).div_ceil(RED_CHUNK));
-        s += &format!(
-            "const BOX_LO: vec3<i32> = vec3<i32>({}, {}, {});\nconst BOX_N: vec3<u32> = vec3<u32>({}u, {}u, {}u);\n",
-            self.box_lo[0], self.box_lo[1], self.box_lo[2], self.box_n[0], self.box_n[1], self.box_n[2]
-        );
-        s += &format!(
-            "const OCC_LO: vec3<f32> = {};\nconst OCC_INVH: f32 = {};\nconst OCC_N: vec3<i32> = vec3<i32>({}, {}, {});\nconst NTRI: u32 = {}u;\n",
-            v3(self.occ_lo),
-            fl(1.0 / self.occ_h),
-            self.occ_n[0],
-            self.occ_n[1],
-            self.occ_n[2],
-            self.ntri
-        );
+        s += &format!("const NREC: u32 = {}u;\nconst NPART: u32 = {}u;\n", self.nrec, self.nrec.max(1).div_ceil(RED_CHUNK));
         let (clo, cn) = self.child.unwrap_or(([0; 3], [1; 3]));
         s += &format!(
             "const HAS_CHILD: bool = {};\nconst CH_LO: vec3<i32> = vec3<i32>({}, {}, {});\nconst CH_N: vec3<u32> = vec3<u32>({}u, {}u, {}u);\nconst CH_NODES: u32 = {}u;\n",
@@ -213,7 +181,6 @@ impl LevelShader {
         s += &format!("const NVERT: u32 = {}u;\nconst VOFF: f32 = {};\nconst NPIX: u32 = {}u;\nconst HIST_OFF: u32 = {}u;\n", self.nvert, fl(self.vertex_offset), self.npix, self.hist_off);
         s += &format!("const FS: f32 = {};\nconst INV_S: f32 = {};\n", fl(FP16_SCALE), fl(1.0 / FP16_SCALE));
         s += &format!("const PER: vec3<bool> = vec3<bool>({}, {}, {});\n", self.periodic[0], self.periodic[1], self.periodic[2]);
-        s += &format!("const WALL_MODEL: bool = {};\n", self.wall_model);
         s += &format!("const N_SPONGE: bool = {};\n", self.sponge_lo.iter().chain(self.sponge_hi.iter()).any(|&v| v > 0.0));
 
         let elem = if self.fp16 { "f16" } else { "f32" };
@@ -226,9 +193,6 @@ impl LevelShader {
         s += COMMON;
         s += &self.gen_step();
         s += &self.gen_level_kernels();
-        if self.moving {
-            s += MOVING;
-        }
         s
     }
 
@@ -452,9 +416,6 @@ const BINDINGS: &str = r#"
 @group(0) @binding(13) var<storage, read_write> mom_up: array<f32>;
 @group(0) @binding(14) var<storage, read_write> mom_child_up: array<f32>;
 @group(0) @binding(15) var<storage, read_write> red: array<f32>;
-@group(0) @binding(16) var<storage, read_write> occ: array<u32>;
-@group(0) @binding(17) var<storage, read_write> tris: array<vec4<f32>>;
-@group(0) @binding(18) var<storage, read_write> qscr: array<atomic<u32>>;
 @group(0) @binding(19) var<storage, read_write> probes: array<f32>;
 @group(0) @binding(20) var<storage, read_write> spix: array<u32>;
 @group(0) @binding(21) var<storage, read_write> sacc: array<f32>;
@@ -491,8 +452,6 @@ fn sround(x: f32, key: u32) -> f32 {
   return clamp(x + r * ulp, -65000.0, 65000.0);
 }
 
-fn to_body(v: vec3<f32>) -> vec3<f32> { return vec3<f32>(dot(st.r0.xyz, v), dot(st.r1.xyz, v), dot(st.r2.xyz, v)); }
-fn to_body_prev(v: vec3<f32>) -> vec3<f32> { return vec3<f32>(dot(st.q0.xyz, v), dot(st.q1.xyz, v), dot(st.q2.xyz, v)); }
 fn from_body(b: vec3<f32>) -> vec3<f32> { return st.r0.xyz * b.x + st.r1.xyz * b.y + st.r2.xyz * b.z; }
 
 fn sponge(xyz: vec3<u32>) -> f32 {
@@ -531,67 +490,6 @@ fn rebuild(rho: f32, u: vec3<f32>, p_post: array<f32, 6>) -> array<f32, 27> {
   var f: array<f32, 27>;
   for (var i = 0u; i < 27u; i++) { f[i] = fe[i] + fn_[i]; }
   return f;
-}
-
-// Wall model for boundary layers thinner than a cell: the first fluid
-// cell's velocity along the wall is matched to Spalding's law of the wall
-// and the cell's viscosity set so the lattice carries that wall shear stress
-// (tau_w = nu_eff u_t / y). In the viscous sublayer this gives back the
-// molecular viscosity, so resolved flows are unchanged.
-fn qof(base: u32, i: u32) -> f32 {
-  let s = select(i - 1u, i, i < 13u);
-  return unpack2x16float(recs[base + 2u + s / 2u])[s % 2u];
-}
-// Equilibrium wall model (log law, Spalding's profile) for boundary
-// layers thinner than a cell. From the cell's velocity along the wall at
-// height y it finds the friction velocity u*, gives the cell the mixing-
-// length viscosity kappa u* y and lets the wall slip at u_t - u*/kappa, so
-// the cell carries the wall shear stress rho u*^2 with the log-law slope.
-// In the viscous sublayer (y+ < 11) it does nothing (plain no-slip).
-fn wall_slip(base: u32, mask: u32, pc: vec3<f32>, n: u32) -> vec4<f32> {
-  var nsum = vec3<f32>(0.0);
-  for (var i = 0u; i < 27u; i++) {
-    if ((mask & (1u << i)) != 0u) { nsum += CV[i] * W[i] * (1.5 - qof(base, i)); }
-  }
-  let nl = length(nsum);
-  if (nl < 1e-6) { return vec4<f32>(0.0); }
-  let nw = nsum / nl;
-  var y = 2.0;
-  for (var i = 0u; i < 27u; i++) {
-    if ((mask & (1u << i)) != 0u) {
-      let cn = dot(CV[i], nw) / length(CV[i]);
-      if (cn > 0.5) { y = min(y, max(qof(base, i), 0.02) * dot(CV[i], nw)); }
-    }
-  }
-  if (y > 1.9) { return vec4<f32>(0.0); }
-  // the cell's own velocity from its last post-collision state
-  let mo = moments(own(n));
-  let rho = 1.0 + mo.rho1;
-  let u = mo.j / rho;
-  let uwall = cross(st.omega.xyz, pc + y * nw);
-  let ur = u - uwall;
-  let utv = ur - dot(ur, nw) * nw;
-  let ut = length(utv);
-  let nu0 = (TAU0 - 0.5) / 3.0;
-  if (ut < 1e-7) { return vec4<f32>(0.0); }
-  let kap = 0.41;
-  let eb = exp(-kap * 5.2);
-  var ust = sqrt(nu0 * ut / y);
-  for (var it = 0; it < 20; it++) {
-    let up = ut / ust;
-    let yp = y * ust / nu0;
-    let ku = min(kap * up, 30.0);
-    let g = up + eb * (exp(ku) - 1.0 - ku - 0.5 * ku * ku - ku * ku * ku / 6.0) - yp;
-    let dgdup = 1.0 + eb * kap * (exp(ku) - 1.0 - ku - 0.5 * ku * ku);
-    let dg = dgdup * (-up / ust) - y / nu0;
-    let stp = g / dg;
-    ust = clamp(ust - stp, 0.1 * ust, 10.0 * ust);
-    if (abs(stp) < 1e-5 * ust) { break; }
-  }
-  let yp = y * ust / nu0;
-  if (yp < 11.0) { return vec4<f32>(0.0); }
-  let us = max(ut - ust / kap, 0.0);
-  return vec4<f32>(utv / ut * us, kap * ust * y);
 }
 
 struct Macro { rho: f32, u: vec3<f32>, ok: bool }
@@ -723,19 +621,11 @@ fn step(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) 
   let rec = fg >> 3u;
   var F = vec3<f32>(0.0); var T = vec3<f32>(0.0);
   var base = 0u;
-  var mask = 0u;
-  var wall_nu = 0.0;
   if (rec != 0u) {
     base = (rec - 1u) * RS;
-    mask = recs[base];
+    let mask = recs[base];
     let fin = f;
     let pc = vec3<f32>(xyz) - CENTER;
-    var slip = vec3<f32>(0.0);
-    if (WALL_MODEL && mask != 0u) {
-      let wm = wall_slip(base, mask, pc, n);
-      slip = wm.xyz;
-      wall_nu = wm.w;
-    }
 $WALLS$
   }
   let mo = moments(f);
@@ -749,9 +639,6 @@ $WALLS$
     let dv = deviator(p);
     let pp = dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2] + 2.0 * (dv[3] * dv[3] + dv[4] * dv[4] + dv[5] * dv[5]);
     tau = 0.5 * (TAU0 + sqrt(TAU0 * TAU0 + 18.0 * SMAG2 * sqrt(2.0 * pp) / rho));
-  }
-  if (WALL_MODEL && wall_nu > 0.0) {
-    tau = max(tau, 0.5 + 3.0 * wall_nu);
   }
   if (N_SPONGE) {
     let sp = sponge(xyz);
@@ -782,10 +669,6 @@ $WALLS$
     }
   }
   if (rec != 0u) {
-    if (MOVING) {
-      F += vec3<f32>(bitcast<f32>(recs[base + 15u]), bitcast<f32>(recs[base + 16u]), bitcast<f32>(recs[base + 17u]));
-      T += vec3<f32>(bitcast<f32>(recs[base + 18u]), bitcast<f32>(recs[base + 19u]), bitcast<f32>(recs[base + 20u]));
-    }
     recs[base + 15u] = bitcast<u32>(F.x); recs[base + 16u] = bitcast<u32>(F.y); recs[base + 17u] = bitcast<u32>(F.z);
     recs[base + 18u] = bitcast<u32>(T.x); recs[base + 19u] = bitcast<u32>(T.y); recs[base + 20u] = bitcast<u32>(T.z);
   }
@@ -910,186 +793,3 @@ fn restrict_fill(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_wor
 }
 "#;
 
-const MOVING: &str = r#"
-fn occ_at(b: vec3<f32>) -> bool {
-  let g = vec3<i32>(round((b - OCC_LO) * OCC_INVH));
-  if (any(g < vec3<i32>(0)) || any(g >= OCC_N)) { return false; }
-  let l = u32((g.z * OCC_N.y + g.y) * OCC_N.x + g.x);
-  return ((occ[l >> 5u] >> (l & 31u)) & 1u) != 0u;
-}
-// every cell asks with exactly the same arithmetic for itself and its
-// neighbours, so all agree on which cells are solid
-fn solid_at(p: vec3<i32>, before: bool) -> bool {
-  let pc = vec3<f32>(p) - CENTER;
-  if (before) { return occ_at(to_body_prev(pc)); }
-  return occ_at(to_body(pc));
-}
-fn ray_tri(o: vec3<f32>, d: vec3<f32>, v0: vec3<f32>, e1: vec3<f32>, e2: vec3<f32>) -> f32 {
-  let pv = cross(d, e2);
-  let det = dot(e1, pv);
-  if (abs(det) < 1e-12) { return 9.0; }
-  let inv = 1.0 / det;
-  let tv = o - v0;
-  let a = dot(tv, pv) * inv;
-  if (a < 0.0 || a > 1.0) { return 9.0; }
-  let qv = cross(tv, e1);
-  let b = dot(d, qv) * inv;
-  if (b < 0.0 || a + b > 1.0) { return 9.0; }
-  let t = dot(e2, qv) * inv;
-  if (t < -1e-4 || t > 1.0) { return 9.0; }
-  return max(t, 0.0);
-}
-
-// rotated triangles -> per-link hits (nearest, farthest, count), stored at
-// the cell a link leaves in a positive (canonical) direction
-@compute @workgroup_size(64)
-fn tri_scatter(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
-  let t = lin_id(gid, nwg);
-  if (t >= NTRI) { return; }
-  let a = CENTER + from_body(tris[3u * t].xyz);
-  let e1 = from_body(tris[3u * t + 1u].xyz);
-  let e2 = from_body(tris[3u * t + 2u].xyz);
-  let nrm = cross(e1, e2);
-  let nl = length(nrm);
-  if (nl < 1e-12) { return; }
-  let nn = nrm / nl;
-  let b = a + e1;
-  let c = a + e2;
-  let lo = max(vec3<i32>(ceil(min(min(a, b), c) - 1.74)), BOX_LO);
-  let hi = min(vec3<i32>(floor(max(max(a, b), c) + 1.74)), BOX_LO + vec3<i32>(BOX_N) - vec3<i32>(1));
-  for (var z = lo.z; z <= hi.z; z++) {
-    for (var y = lo.y; y <= hi.y; y++) {
-      for (var x = lo.x; x <= hi.x; x++) {
-        let p = vec3<f32>(f32(x), f32(y), f32(z));
-        let d0 = dot(nn, p - a);
-        if (abs(d0) > 1.74) { continue; }
-        let l = vec3<u32>(vec3<i32>(x, y, z) - BOX_LO);
-        let k = (l.z * BOX_N.y + l.y) * BOX_N.x + l.x;
-        for (var i = 14u; i < 27u; i++) {
-          let d1 = d0 + dot(nn, CV[i]);
-          if (d0 * d1 > 0.0 && abs(d0) > 1e-6) { continue; }
-          let tt = ray_tri(p, CV[i], a, e1, e2);
-          if (tt <= 1.0) {
-            let o = (k * 13u + i - 14u) * 2u;
-            let tb = bitcast<u32>(max(tt, 0.0));
-            atomicMin(&qscr[o], tb);
-            atomicMax(&qscr[o + 1u], tb);
-          }
-        }
-      }
-    }
-  }
-}
-
-@compute @workgroup_size(64)
-fn qclear(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
-  let k = lin_id(gid, nwg);
-  if (k >= NREC * 13u) { return; }
-  atomicStore(&qscr[2u * k], 0x7f7fffffu);
-  atomicStore(&qscr[2u * k + 1u], 0u);
-}
-
-fn slot_of(i: u32) -> u32 { return select(i - 1u, i, i < 13u); }
-
-// re-voxelizes the box of a spinning part for this step's rotation
-@compute @workgroup_size(64)
-fn voxelize(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
-  let k = lin_id(gid, nwg);
-  if (k >= NREC) { return; }
-  let lx = k % BOX_N.x;
-  let ly = (k / BOX_N.x) % BOX_N.y;
-  let lz = k / (BOX_N.x * BOX_N.y);
-  let p = vec3<i32>(i32(lx), i32(ly), i32(lz)) + BOX_LO;
-  let xyz = vec3<u32>(p);
-  let n = cidx(xyz);
-  let pc = vec3<f32>(p) - CENTER;
-  let solid_now = solid_at(p, false);
-  let solid_before = solid_at(p, true);
-  let base = k * RS;
-  var F = vec3<f32>(0.0);
-  let keep = flags[n] & 7u;
-  if (keep != 0u && keep != 1u) { return; } // ghosts stay ghosts
-  if (solid_now) {
-    flags[n] = 1u | ((k + 1u) << 3u);
-    recs[base] = 0u;
-    if (!solid_before) {
-      // the fluid the part just covered gives it its momentum
-      let mo = moments(own(n));
-      F = mo.j;
-    }
-    let T = cross(pc, F);
-    recs[base + 15u] = bitcast<u32>(F.x); recs[base + 16u] = bitcast<u32>(F.y); recs[base + 17u] = bitcast<u32>(F.z);
-    recs[base + 18u] = bitcast<u32>(T.x); recs[base + 19u] = bitcast<u32>(T.y); recs[base + 20u] = bitcast<u32>(T.z);
-    return;
-  }
-  var qv: array<f32, 27>;
-  var qx: array<f32, 27>;
-  var nh: array<u32, 27>;
-  for (var i = 0u; i < 27u; i++) { qv[i] = 9.0; qx[i] = -1.0; nh[i] = 0u; }
-  for (var i = 0u; i < 27u; i++) {
-    if (i == 13u) { continue; }
-    if (i > 13u) {
-      let o = (k * 13u + i - 14u) * 2u;
-      let t0 = atomicLoad(&qscr[o]);
-      if (t0 != 0x7f7fffffu) { qv[i] = bitcast<f32>(t0); qx[i] = bitcast<f32>(atomicLoad(&qscr[o + 1u])); nh[i] = 1u; }
-    } else {
-      let q = vec3<i32>(i32(lx), i32(ly), i32(lz)) + vec3<i32>(CV[i]);
-      if (all(q >= vec3<i32>(0)) && all(q < vec3<i32>(BOX_N))) {
-        let k2 = u32((q.z * i32(BOX_N.y) + q.y) * i32(BOX_N.x) + q.x);
-        let o = (k2 * 13u + (26u - i) - 14u) * 2u;
-        let t0 = atomicLoad(&qscr[o]);
-        if (t0 != 0x7f7fffffu) {
-          qv[i] = 1.0 - bitcast<f32>(atomicLoad(&qscr[o + 1u]));
-          qx[i] = 1.0 - bitcast<f32>(t0);
-          nh[i] = 1u;
-        }
-      }
-    }
-  }
-  var mask = 0u;
-  for (var i = 0u; i < 27u; i++) {
-    if (i == 13u) { continue; }
-    if (solid_at(p + vec3<i32>(CV[i]), false)) {
-      if (nh[i] == 0u) { qv[i] = 1.0; }
-      mask |= (1u << i);
-    } else if (nh[i] > 0u && qx[i] - qv[i] > 1e-5) {
-      mask |= (1u << i);
-    } else {
-      qv[i] = 1.0;
-    }
-  }
-  var qs: array<f32, 26>;
-  for (var i = 0u; i < 27u; i++) { if (i != 13u) { qs[slot_of(i)] = min(qv[i], 1.0); } }
-  for (var w = 0u; w < 13u; w++) { recs[base + 2u + w] = pack2x16float(vec2<f32>(qs[2u * w], qs[2u * w + 1u])); }
-  recs[base] = mask;
-  if (solid_before) {
-    // just uncovered: its neighbours pull what it would have sent out last
-    // step, so that is filled with the equilibrium at the wall velocity, the
-    // density and stress of nearby fluid; the part gives up that momentum
-    var rs = 0.0; var cnt = 0.0;
-    var ps = array<f32, 6>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-    for (var i = 0u; i < 27u; i++) {
-      if (i == 13u) { continue; }
-      let pn = p + vec3<i32>(CV[i]);
-      if (!solid_at(pn, false) && !solid_at(pn, true)) {
-        let m2 = cidx(vec3<u32>(pn));
-        let mo = moments(own(m2));
-        let r2 = 1.0 + mo.rho1;
-        let u2 = mo.j / r2;
-        let s2 = deviator(stress(mo, r2, u2));
-        rs += r2; cnt += 1.0;
-        for (var j = 0u; j < 6u; j++) { ps[j] += s2[j]; }
-      }
-    }
-    let rho = select(1.0, rs / cnt, cnt > 0.0);
-    if (cnt > 0.0) { for (var j = 0u; j < 6u; j++) { ps[j] /= cnt; } }
-    let uw = cross(st.omega.xyz, pc);
-    put_src(n, rebuild(rho, uw, ps));
-    F = -rho * uw;
-  }
-  let T = cross(pc, F);
-  recs[base + 15u] = bitcast<u32>(F.x); recs[base + 16u] = bitcast<u32>(F.y); recs[base + 17u] = bitcast<u32>(F.z);
-  recs[base + 18u] = bitcast<u32>(T.x); recs[base + 19u] = bitcast<u32>(T.y); recs[base + 20u] = bitcast<u32>(T.z);
-  flags[n] = (k + 1u) << 3u;
-}
-"#;
