@@ -11,8 +11,8 @@ Errors: HTTP 4xx/5xx with `{ "error": "plain words" }`.
 
 | Method | Path | Body / result |
 |---|---|---|
-| GET | `/api/health` | `{ version, data_dir, machine: { cpu, cores, ram_bytes, gpu, gpu_memory_bytes }, checks: Check[] }` |
-| POST | `/api/system/update` | → `{ message }` after pulling the newest SimLab from GitHub and rebuilding (takes minutes; then restart) |
+| GET | `/api/health` | `{ version, install: "source"|"download", data_dir, machine: { cpu, cores, ram_bytes, gpu, gpu_memory_bytes }, checks: Check[] }` |
+| POST | `/api/system/update` | → `{ message, url?, latest? }`. Built from source (`health.install == "source"`): pulls the newest SimLab and rebuilds (takes minutes; then restart). Downloaded (`"download"`): only asks GitHub for the newest release; `url` is where to download it when it is newer |
 | POST | `/api/system/fix` | `{ id }` → starts the fix for a check (only ones with `fix` set); progress arrives as `check` events |
 | GET/PUT | `/api/settings` | `{ memory_budget_gb, cpu_threads, default_units_mm, reference_engine_enabled }` |
 
@@ -126,3 +126,13 @@ PropSummary = { kind: "prop", headline, blades, radius_mm, hub_radius_mm, rotati
 Tools mirror the API: list/create projects, import a model from a file path,
 describe a model's patches, list materials and motors, create and run studies,
 wait for a run, read summaries and field statistics, compare runs.
+
+## Areas picked by shape (regions)
+
+A strength config may carry `regions: [{ id, label, shape }]` for areas that are
+not a patch of their own (a smooth propeller hub, "3 mm around where I
+clicked"). `shape` is `{type:"sphere", center_mm, radius_mm}`,
+`{type:"cylinder", axis, center_mm, radius_mm, half_length_mm?}` or
+`{type:"box", min_mm, max_mm}`. Ids start at 1,000,000 and are listed in
+`support.patches` or a load's `patches` like any patch id. Surface faces whose
+centre lies inside the shape belong to the region.

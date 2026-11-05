@@ -254,17 +254,38 @@ fn run_ok(cmd: &mut Command) -> anyhow::Result<()> {
 /// Settings → Update: pulls the newest SimLab from GitHub into the folder it
 /// was installed from and rebuilds the app. The new version is used after a
 /// restart. Blocking; call from spawn_blocking.
-pub fn update(app: &Arc<App>) -> anyhow::Result<String> {
-    let src = std::fs::read_to_string(app.data.join("source_dir")).map_err(|_| anyhow::anyhow!("SimLab does not know which folder it was installed from; run ./install.sh from the repo once"))?;
-    let src = PathBuf::from(src.trim());
+pub const RELEASES_URL: &str = "https://github.com/offgridevices/simlab/releases/latest";
+
+/// How this copy was installed: built from a git checkout (`make install`
+/// writes `source_dir`) or downloaded from a GitHub release.
+pub fn source_dir(app: &App) -> Option<PathBuf> {
+    let src = PathBuf::from(std::fs::read_to_string(app.data.join("source_dir")).ok()?.trim());
+    src.join(".git").exists().then_some(src)
+}
+
+pub struct UpdateResult {
+    pub message: String,
+    /// where to download the newer version (downloaded copies only)
+    pub url: Option<String>,
+    pub latest: Option<String>,
+}
+
+/// Built from source: pull and rebuild. Downloaded: ask GitHub for the newest
+/// release and say where to get it (nothing is downloaded or replaced).
+pub fn update(app: &Arc<App>) -> anyhow::Result<UpdateResult> {
+    let Some(src) = source_dir(app) else {
+        return check_release(env!("CARGO_PKG_VERSION"));
+    };
     let git = find_program("git").ok_or_else(|| anyhow::anyhow!("git is missing"))?;
     let before = Command::new(&git).arg("-C").arg(&src).args(["rev-parse", "HEAD"]).output()?;
     run_ok(Command::new(&git).arg("-C").arg(&src).args(["pull", "--ff-only"]))?;
     let after = Command::new(&git).arg("-C").arg(&src).args(["rev-parse", "HEAD"]).output()?;
+    let done = |m: &str| UpdateResult { message: m.into(), url: None, latest: None };
     if before.stdout == after.stdout {
-        return Ok("SimLab is up to date.".into());
+        return Ok(done("SimLab is up to date."));
     }
     let home = std::env::var("HOME").unwrap_or_default();
+    let _ = std::fs::create_dir_all(format!("{home}/Library/Logs/SimLab"));
     let log = std::fs::File::create(format!("{home}/Library/Logs/SimLab/update.log"))?;
     let status = Command::new("/bin/bash")
         .arg(src.join("install.sh"))
@@ -275,5 +296,49 @@ pub fn update(app: &Arc<App>) -> anyhow::Result<String> {
     if !status.success() {
         anyhow::bail!("the update did not build; details in ~/Library/Logs/SimLab/update.log");
     }
-    Ok("Updated. Quit and reopen SimLab to use the new version.".into())
+    Ok(done("Updated. Quit and reopen SimLab to use the new version."))
+}
+
+fn check_release(current: &str) -> anyhow::Result<UpdateResult> {
+    // macOS's own curl: no extra network library in the engine
+    let out = Command::new("/usr/bin/curl")
+        .args(["-fsSL", "--max-time", "15", "-H", "Accept: application/vnd.github+json", "-A", "SimLab-update-check"])
+        .arg("https://api.github.com/repos/offgridevices/simlab/releases/latest")
+        .output()?;
+    if !out.status.success() {
+        anyhow::bail!("could not reach GitHub to check for a newer SimLab (no internet, or no release yet)");
+    }
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout)?;
+    let tag = v["tag_name"].as_str().unwrap_or_default().trim_start_matches('v').to_string();
+    let url = v["html_url"].as_str().unwrap_or(RELEASES_URL).to_string();
+    Ok(if newer(&tag, current) {
+        UpdateResult {
+            message: format!("SimLab {tag} is out (you have {current}). Download it, then drag it into Applications to replace this one. Your projects stay."),
+            url: Some(url),
+            latest: Some(tag),
+        }
+    } else {
+        UpdateResult { message: format!("SimLab is up to date ({current})."), url: None, latest: Some(tag) }
+    })
+}
+
+/// "0.10.0" > "0.9.2"; anything unparsable is never newer
+fn newer(latest: &str, current: &str) -> bool {
+    let parse = |s: &str| -> Option<Vec<u64>> { s.split(['.', '-']).take(3).map(|p| p.parse().ok()).collect() };
+    match (parse(latest), parse(current)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    #[test]
+    fn version_order() {
+        assert!(super::newer("0.10.0", "0.9.2"));
+        assert!(super::newer("1.0.0", "0.99.99"));
+        assert!(!super::newer("0.1.0", "0.1.0"));
+        assert!(!super::newer("0.0.9", "0.1.0"));
+        assert!(!super::newer("", "0.1.0"));
+    }
 }

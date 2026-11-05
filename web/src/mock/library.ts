@@ -48,6 +48,7 @@ export const RAM = 36 * 1024 ** 3;
 export function health(checks: Check[]): Health {
   return {
     version: "0.1.0-demo",
+    install: "download",
     data_dir: "~/Library/Application Support/SimLab",
     machine: { cpu: "Apple M3 Pro", cores: 12, ram_bytes: RAM, gpu: "Apple M3 Pro (18-core GPU)", gpu_memory_bytes: RAM },
     checks,

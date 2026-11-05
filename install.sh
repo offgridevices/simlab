@@ -51,7 +51,7 @@ need cargo rustup "builds the engine"
 if ! rustc --version >/dev/null 2>&1; then rustup default stable; fi
 need node node "builds the screens"
 need pnpm pnpm "builds the screens"
-need uv uv "installs the Gmsh mesher safely, with locked hashes"
+[ "$BUILD_ONLY" = 1 ] || need uv uv "installs the Gmsh mesher safely, with locked hashes"
 
 say "Building the screens"
 ( cd web && pnpm install --frozen-lockfile --silent && pnpm build >/dev/null )
@@ -59,11 +59,11 @@ say "Building the screens"
 say "Building the engine (the first time takes a few minutes)"
 cargo build --release --locked -p simlab-engine
 mkdir -p app/src-tauri/binaries
-cp target/release/simlab-engine app/src-tauri/binaries/simlab-engine-aarch64-apple-darwin
+cp "${CARGO_TARGET_DIR:-target}/release/simlab-engine" app/src-tauri/binaries/simlab-engine-aarch64-apple-darwin
 
 say "Building SimLab.app"
 cp web/src/styles/tokens.css app/splash/tokens.css   # one source of design truth
-( cd app && pnpm install --frozen-lockfile --silent \
+( cd app && unset CARGO_TARGET_DIR && pnpm install --frozen-lockfile --silent \
   && pnpm tauri icon src-tauri/icons/source.png -o src-tauri/icons >/dev/null \
   && pnpm tauri build --bundles app >/dev/null )
 BUILT="app/src-tauri/target/release/bundle/macos/SimLab.app"

@@ -16,9 +16,17 @@ export interface Check {
 }
 export interface Health {
   version: string;
+  /** "source": built with make install (Update rebuilds); "download": from a GitHub release (Update only checks) */
+  install?: "source" | "download";
   data_dir: string;
   machine: { cpu: string; cores: number; performance_cores?: number; ram_bytes: number; gpu?: string | null; gpu_memory_bytes?: number };
   checks: Check[];
+}
+export interface UpdateResult {
+  message: string;
+  /** where to download a newer release (downloaded copies only) */
+  url?: string | null;
+  latest?: string | null;
 }
 export interface Settings {
   memory_budget_gb: number;

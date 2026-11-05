@@ -1,0 +1,72 @@
+# Builds SimLab.app for Apple Silicon Macs and attaches it to a GitHub release.
+# Runs when a version tag (v0.2.0) is pushed; `make release VERSION=0.2.0`
+# makes the tag. Free and unsigned (ad hoc): the first open needs
+# System Settings → Privacy & Security → Open Anyway (see the release notes).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write # create the release and upload the app
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  mac-app:
+    runs-on: macos-26 # Apple Silicon
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      PNPM_VERSION: "12.16.1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Check the tag matches the app version
+        run: |
+          app=$(python3 -c 'import json;print(json.load(open("app/src-tauri/tauri.conf.json"))["version"])')
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "tag $TAG, app $app, engine $crate"
+          [ "$TAG" = "v$app" ] && [ "$app" = "$crate" ] || { echo "::error::tag and versions differ; use make release"; exit 1; }
+
+      - name: Tools
+        run: |
+          npm install -g "pnpm@$PNPM_VERSION"
+          rustup show active-toolchain
+          node --version; pnpm --version; cargo --version
+
+      - name: Build SimLab.app
+        run: ./install.sh --build-only --yes
+
+      - name: Check the app is signed and complete
+        run: |
+          APP=app/src-tauri/target/release/bundle/macos/SimLab.app
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          test -x "$APP/Contents/MacOS/simlab-engine"
+          test -f "$APP/Contents/Resources/web/index.html"
+          test -f "$APP/Contents/Resources/mesher/uv.lock"
+          "$APP/Contents/MacOS/simlab-engine" version
+
+      - name: Package
+        run: |
+          ./scripts/package_app.sh "$TAG" dist
+          ls -l dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "SimLab $TAG" --notes-file dist/NOTES.md
+          fi

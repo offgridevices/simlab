@@ -17,6 +17,7 @@ import type {
   Study,
   StudyConfig,
   SurfaceBuffers,
+  UpdateResult,
 } from "./types";
 
 export class ApiError extends Error {
@@ -127,6 +128,7 @@ export function createApi(t: Transport) {
     // system
     health: () => req<Health>("GET", "/api/health"),
     fix: (id: string) => req<unknown>("POST", "/api/system/fix", { id }),
+    update: () => req<UpdateResult>("POST", "/api/system/update"),
     settings: () => req<Settings>("GET", "/api/settings"),
     saveSettings: (s: Settings) => req<Settings>("PUT", "/api/settings", s),
 

@@ -17,9 +17,27 @@ Every project, test and result is saved on your Mac. Claude can drive it too
 (MCP), so you can say "try this frame in PETG and PA-CF and tell me which arm
 breaks first".
 
-## Install (once)
+## Download
 
-You need an Apple Silicon Mac. In Terminal:
+For Apple Silicon Macs (M1 or newer), macOS 13 or later:
+
+1. Download the newest **SimLab-…-mac-apple-silicon.zip** from
+   [Releases](https://github.com/offgridevices/simlab/releases/latest) and
+   double-click it.
+2. Drag **SimLab** into **Applications**.
+3. Open it. The download is free and not signed by Apple, so the first time
+   macOS says it cannot check it: click **Done**, open **System Settings →
+   Privacy & Security**, scroll down and click **Open Anyway** next to SimLab.
+   After that it opens normally. If SimLab says its engine did not start,
+   run this once in Terminal, then open it again:
+   `xattr -dr com.apple.quarantine /Applications/SimLab.app`
+
+Updates: **Settings → Updates → Check for updates** tells you when a newer
+version is out and links to it.
+
+## Or build it yourself
+
+In Terminal:
 
 ```bash
 git clone https://github.com/offgridevices/simlab.git
@@ -30,14 +48,27 @@ make install
 The script checks for what it needs (Rust, Node, pnpm, uv) and asks before
 installing anything missing with Homebrew. It builds SimLab and puts
 **SimLab.app** in your Applications folder. After that you open it like any
-app; no Terminal. Apps built on your own Mac need no paid Apple signing.
+app; no Terminal. Apps built on your own Mac need no paid Apple signing and no
+Open Anyway step.
 
-The first time it opens, SimLab checks your Mac (Settings → System check) and
-offers to set up the Gmsh mesher (about 60 MB, hash-checked, kept in SimLab's
-own folder). Updates: `make update`, or Settings → Update.
+Updates: `make update`, or **Settings → Updates → Update** (pulls and rebuilds).
+
+Either way, the first time it opens SimLab checks your Mac (Settings → System
+check) and offers to set up the Gmsh mesher (about 60 MB, hash-checked, kept in
+SimLab's own folder; it needs [uv](https://docs.astral.sh/uv/)).
 
 Every command: run `make` on its own to list them (`install`, `update`, `test`,
-`validate`, `claude`, `uninstall`, ...).
+`validate`, `claude`, `release`, `uninstall`, ...).
+
+### Making a release
+
+```bash
+make release VERSION=0.2.0
+```
+
+That sets the version, commits and tags it on your Mac. Pushing the tag
+(`git push origin HEAD v0.2.0`) makes GitHub build SimLab.app and attach it to
+a new release (`.github/workflows/release.yml`).
 
 ## Connect Claude (optional)
 

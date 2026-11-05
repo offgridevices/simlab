@@ -3,7 +3,7 @@
 SHELL := /bin/bash
 export PATH := /opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:$(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: help install update build dev test validate clean uninstall claude
+.PHONY: help install update build dev test validate clean uninstall claude release
 
 help: ## Show these commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-10s %s\n", $$1, $$2}'
@@ -30,6 +30,9 @@ test: ## Run the quick tests
 
 validate: ## Run every accuracy check (slow) and print the results
 	cargo test --workspace --release -- --include-ignored
+
+release: ## Make a new version, e.g. make release VERSION=0.2.0 (tags it here; pushing the tag builds the download on GitHub)
+	@./scripts/release.sh "$(VERSION)"
 
 claude: ## Connect Claude Code to SimLab
 	claude mcp add simlab -- /Applications/SimLab.app/Contents/MacOS/simlab-engine mcp

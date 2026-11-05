@@ -9,11 +9,28 @@ use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::webview::NewWindowResponse;
+use tauri::{Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder};
 
 const PORT: u16 = 7311;
 
 struct Engine(Mutex<Option<Child>>);
+
+/// SimLab's own pages: the splash and the local engine. Anything else (a
+/// GitHub release, a docs link) opens in the Mac's default browser instead.
+fn is_simlab(url: &Url) -> bool {
+    match url.scheme() {
+        "tauri" | "about" | "data" | "blob" => true,
+        "http" | "https" => matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "tauri.localhost")),
+        _ => false,
+    }
+}
+
+fn open_outside(url: &Url) {
+    if matches!(url.scheme(), "http" | "https" | "mailto") {
+        let _ = Command::new("/usr/bin/open").arg(url.as_str()).spawn();
+    }
+}
 
 fn engine_up() -> bool {
     TcpStream::connect_timeout(&([127, 0, 0, 1], PORT).into(), Duration::from_millis(200)).is_ok()
@@ -47,6 +64,18 @@ fn main() {
                 .min_inner_size(900.0, 600.0)
                 // let the page receive dropped files (drag an STL onto it)
                 .disable_drag_drop_handler()
+                .on_navigation(|url| {
+                    let ok = is_simlab(url);
+                    if !ok {
+                        open_outside(url);
+                    }
+                    ok
+                })
+                // links with target="_blank" (e.g. "Download 0.2.0")
+                .on_new_window(|url, _| {
+                    open_outside(&url);
+                    NewWindowResponse::Deny
+                })
                 .build()?;
             let child = match start_engine() {
                 Ok(c) => c,
@@ -67,7 +96,7 @@ fn main() {
                     std::thread::sleep(Duration::from_millis(100));
                 }
                 let _ = window.eval(
-                    "document.getElementById('err').textContent = 'The engine did not start. Its log is in ~/Library/Logs/SimLab/engine.log'",
+                    "document.getElementById('err').textContent = 'The engine did not start. If you downloaded SimLab, macOS may still be holding it back: run   xattr -dr com.apple.quarantine /Applications/SimLab.app   in Terminal, then open SimLab again. Log: ~/Library/Logs/SimLab/engine.log'",
                 );
             });
             Ok(())

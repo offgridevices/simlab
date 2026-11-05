@@ -448,6 +448,10 @@ async function handle(method: string, path: string, body: unknown): Promise<Resp
   const [a, b, c, d, e] = seg;
 
   if (a === "health" && method === "GET") return json(health(checks));
+  if (a === "system" && b === "update" && method === "POST") {
+    await new Promise((r) => setTimeout(r, 600));
+    return json({ message: "SimLab 0.2.0 is out (you have 0.1.0-demo). Download it, then drag it into Applications to replace this one. Your projects stay.", url: "https://github.com/offgridevices/simlab/releases/latest", latest: "0.2.0" });
+  }
   if (a === "system" && b === "fix" && method === "POST") {
     const chk = must(checks.find((x) => x.id === (body as { id: string }).id), "check");
     if (!chk.fix) throw new HttpError(400, "This check has nothing to fix");

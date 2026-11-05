@@ -2,7 +2,7 @@
 // Claude, and your own materials and motors.
 import { Label } from "@/components/ui/label";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { CheckIcon, CopyIcon, MonitorIcon, MoonIcon, PlusIcon, SunIcon, Trash2Icon } from "lucide-react";
+import { CheckIcon, CopyIcon, DownloadIcon, MonitorIcon, MoonIcon, PlusIcon, RefreshCwIcon, SunIcon, Trash2Icon } from "lucide-react";
 import { Screen, TopBar } from "../components/topbar";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +18,7 @@ import { Confirm } from "../components/confirm";
 import { useApp, useEvents, MOCK } from "../lib/app";
 import { getTheme, setTheme, type ThemeChoice } from "../lib/theme";
 import { n, type Tone } from "../lib/format";
-import type { Check, CheckStatus, Health, Material, Motor, Process, Settings as SettingsT } from "../lib/types";
+import type { Check, CheckStatus, Health, Material, Motor, Process, Settings as SettingsT, UpdateResult } from "../lib/types";
 import { Segmented } from "../workspace/common";
 
 export const MCP_COMMAND = `claude mcp add simlab -- "/Applications/SimLab.app/Contents/MacOS/simlab-engine" mcp`;
@@ -178,6 +178,8 @@ export default function Settings() {
           <p className="text-xs text-muted-foreground">Your projects and results are kept in {health?.data_dir ?? "SimLab's folder"}. Nothing is uploaded.</p>
         </Block>
 
+        <UpdateBlock health={health} />
+
         <Block title="Connect Claude" description="Let Claude set up and run tests for you. Ask it things like “Test my frame in PETG at full throttle” and watch the tests appear here.">
           <div className="flex flex-col gap-2">
             <span className="text-sm font-medium">Claude Code</span>
@@ -210,6 +212,57 @@ export default function Settings() {
         testId="fix-confirm"
       />
     </Screen>
+  );
+}
+
+function UpdateBlock({ health }: { health: Health | null }) {
+  const { api } = useApp();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<UpdateResult | null>(null);
+  const fromSource = health?.install === "source";
+  const check = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult(await api.update());
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Block
+      title="Updates"
+      description={
+        fromSource
+          ? "Built on this Mac from the SimLab folder. Update pulls the newest code from GitHub and rebuilds (a few minutes)."
+          : "Downloaded from GitHub. SimLab checks for a newer version only when you ask."
+      }
+    >
+      <div className="flex flex-wrap items-center gap-3" data-testid="update-row">
+        <span className="text-sm">
+          Version <span className="num">{health?.version ?? "…"}</span>
+        </span>
+        <Button size="sm" variant="outline" onClick={check} disabled={busy || !health} data-testid="update-check">
+          <RefreshCwIcon className={busy ? "animate-spin" : undefined} />
+          {busy ? (fromSource ? "Updating…" : "Checking…") : fromSource ? "Update" : "Check for updates"}
+        </Button>
+        {result?.url && (
+          <Button size="sm" asChild data-testid="update-download">
+            <a href={result.url} target="_blank" rel="noreferrer">
+              <DownloadIcon />
+              Download {result.latest}
+            </a>
+          </Button>
+        )}
+      </div>
+      {result && (
+        <p className="text-sm text-soft" data-testid="update-message">
+          {result.message}
+        </p>
+      )}
+    </Block>
   );
 }
 

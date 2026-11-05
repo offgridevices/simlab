@@ -103,6 +103,9 @@ async fn health(State(app): S) -> R<Json<Value>> {
     let checks = app.checks.lock().unwrap_or_else(|e| e.into_inner()).clone();
     Ok(Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
+        // "source": built here with make install (Update pulls and rebuilds);
+        // "download": from a GitHub release (Update only checks for a newer one)
+        "install": if system::source_dir(&app).is_some() { "source" } else { "download" },
         "data_dir": app.data,
         "machine": {
             "cpu": system::cpu_name(), "cores": system::cores(),
@@ -129,8 +132,8 @@ async fn system_fix(State(app): S, Json(b): Json<FixBody>) -> R<Json<Value>> {
 
 async fn system_update(State(app): S) -> R<Json<Value>> {
     let app2 = app.clone();
-    let msg = tokio::task::spawn_blocking(move || system::update(&app2)).await.map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
-    Ok(Json(json!({"message": msg})))
+    let r = tokio::task::spawn_blocking(move || system::update(&app2)).await.map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    Ok(Json(json!({"message": r.message, "url": r.url, "latest": r.latest})))
 }
 
 async fn get_settings(State(app): S) -> Json<Settings> {
