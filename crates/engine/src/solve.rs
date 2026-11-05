@@ -135,7 +135,7 @@ pub fn strength_mesh(ctx: &Ctx, model: &ModelRow, c: &StrengthConfig) -> Result<
     let unit_mm = model.unit_mm;
 
     // 1. mesh the part
-    ctx.phase("meshing", 0.0, 0.25);
+    ctx.phase("running", 0.0, 0.25); // the API has one active status: "running" (the message says it is meshing)
     let t0 = std::time::Instant::now();
     let mesh_dir = ctx.dir.join("mesh");
     // CAD files mesh from their exact faces; triangle files (STL/OBJ/3MF)
