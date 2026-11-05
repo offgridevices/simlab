@@ -1659,6 +1659,7 @@ dependencies = [
  "simlab-core",
  "simlab-fea",
  "simlab-prop",
+ "simlab-reference",
  "tokio",
  "tokio-stream",
  "tower-http",

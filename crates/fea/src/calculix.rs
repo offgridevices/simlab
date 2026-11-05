@@ -22,13 +22,20 @@ pub struct InpOptions {
     pub heading: String,
     /// use CalculiX's own pressure / gravity / centrifugal cards
     pub native_loads: bool,
-    /// add *NLGEOM-free static step (always linear); request reactions too
+    /// request reactions (RF) in the results too
     pub write_reactions: bool,
+    /// geometrically nonlinear step (`*STEP, NLGEOM`): stress stiffening and
+    /// spin softening come out of the large-deformation solve, the
+    /// counterpart of SimLab's stress-stiffening passes. Off: one linear step.
+    pub nlgeom: bool,
+    /// `*STATIC, SOLVER=...` (e.g. "ITERATIVE CHOLESKY"); None = CalculiX's
+    /// default direct solver (SPOOLES in the reference image)
+    pub solver: Option<String>,
 }
 
 impl Default for InpOptions {
     fn default() -> Self {
-        InpOptions { heading: "SimLab reference run".into(), native_loads: true, write_reactions: true }
+        InpOptions { heading: "SimLab reference run".into(), native_loads: true, write_reactions: true, nlgeom: false, solver: None }
     }
 }
 
@@ -83,7 +90,22 @@ pub fn write_inp<W: Write>(w: &mut W, mesh: &TetMesh, prep: &Prepared, opts: &In
             }
         }
     }
-    writeln!(w, "*STEP\n*STATIC")?;
+    writeln!(w, "{}", if opts.nlgeom { "*STEP, NLGEOM" } else { "*STEP" })?;
+    match &opts.solver {
+        Some(sv) => writeln!(w, "*STATIC, SOLVER={sv}")?,
+        None => writeln!(w, "*STATIC")?,
+    }
+    if opts.nlgeom {
+        // Newton converges on the displacement: CalculiX's default force
+        // test compares the largest nodal residual with the AVERAGE nodal
+        // force, which on a spinning part (big loads at the tips, tiny ones
+        // near the hub) stalls at a few % while the corrections are already
+        // 1e-5 of the step and the stresses settled. So: corrections under
+        // 1e-4 of the displacement, residual under 10 % of the average force,
+        // and room for more iterations before CalculiX halves the step.
+        writeln!(w, "*CONTROLS, PARAMETERS=FIELD\n0.1, 1.e-4")?;
+        writeln!(w, "*CONTROLS, PARAMETERS=TIME INCREMENTATION\n4, 8, 9, 40, 10, 4, 0, 40")?;
+    }
     let nodal: Vec<f64> = if opts.native_loads {
         (0..3 * n).map(|d| prep.parts.surface[d] + prep.parts.inertia_nodal[d]).collect()
     } else {

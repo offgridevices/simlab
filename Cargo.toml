@@ -13,6 +13,7 @@ simlab-core = { path = "crates/core" }
 simlab-fea = { path = "crates/fea" }
 simlab-cfd = { path = "crates/cfd" }
 simlab-prop = { path = "crates/prop" }
+simlab-reference = { path = "crates/reference" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"

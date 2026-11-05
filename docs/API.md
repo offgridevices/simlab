@@ -14,11 +14,19 @@ Errors: HTTP 4xx/5xx with `{ "error": "plain words" }`.
 | GET | `/api/health` | `{ version, install: "source"|"download", data_dir, machine: { cpu, cores, ram_bytes, gpu, gpu_memory_bytes }, checks: Check[] }` |
 | POST | `/api/system/update` | → `{ message, url?, latest? }`. Built from source (`health.install == "source"`): pulls the newest SimLab and rebuilds (takes minutes; then restart). Downloaded (`"download"`): only asks GitHub for the newest release; `url` is where to download it when it is newer |
 | POST | `/api/system/fix` | `{ id }` → starts the fix for a check (only ones with `fix` set); progress arrives as `check` events |
-| GET/PUT | `/api/settings` | `{ memory_budget_gb, cpu_threads, default_units_mm, reference_engine_enabled }` |
+| GET/PUT | `/api/settings` | `{ memory_budget_gb, cpu_threads, default_units_mm, reference_engine_enabled }` (`cpu_threads`: cores for strength tests, OpenFOAM and CalculiX; `reference_engine_enabled`: offer the CalculiX double-check on strength results) |
 
 `Check = { id, label, status: "ok"|"missing"|"error"|"working"|"optional", detail, fix?: { label, asks: string } }`
 — `asks` is the plain-words consent question the UI shows before running a fix
 (e.g. "Start Colima? It uses 8 GB of memory while it runs.").
+
+Checks: `machine`, `gpu` (quick air previews), `mesher` (Gmsh), `docker`, `disk`.
+`docker` is **needed for accurate air tests** (OpenFOAM) and CalculiX checks;
+strength and propeller tests work without it. Its fix starts Colima (an
+existing Colima keeps its own CPU and memory settings) or builds the
+`simlab-reference:1` image. A Colima SimLab started is stopped again when the
+engine quits; one that was already running is left alone. Reference
+containers a crashed engine left behind are killed at start-up.
 
 ## Library
 
@@ -65,8 +73,8 @@ MountGuess = { center_mm, axis, bolt_circle_mm, patches: number[] }   // a motor
 |---|---|---|
 | POST | `/api/projects/:id/studies` | `{ name, model_id, config: StudyConfig }` → `Study` |
 | GET / PATCH / DELETE | `/api/studies/:id` | `Study`; PATCH `{ name?, config? }` |
-| POST | `/api/studies/:id/estimate` | → `{ fits, memory_bytes, budget_bytes, size: { elements? , nodes?, cells? }, seconds, note }` |
-| POST | `/api/studies/:id/runs` | `{ engine?: "native"|"reference" }` → `Run` (queued) |
+| POST | `/api/studies/:id/estimate` | `{ engine? }` (optional body) → `Estimate` |
+| POST | `/api/studies/:id/runs` | `{ engine? }` (optional body) → `Run` (queued). 409 when the engine needs Docker and it is not ready: `{ error, needs: Check }` (ask `needs.fix.asks`, run `POST /api/system/fix { id: needs.id }`, wait for its `check` event to turn `ok`, start again) |
 | GET | `/api/runs/:id` | `Run` |
 | POST | `/api/runs/:id/stop` | stops it |
 | DELETE | `/api/runs/:id` | deletes it and its files |
@@ -76,10 +84,37 @@ MountGuess = { center_mm, axis, bolt_circle_mm, patches: number[] }   // a motor
 | GET | `/api/runs/:id/slice/:name/:field` | `f32[nu*nv]`, row-major in v then u; `NaN` inside the part |
 | GET | `/api/runs/:id/log` | text |
 
+**Engines.** `engine` picks the solver:
+
+| test | `"reference"` | `"native"` |
+|---|---|---|
+| wind tunnel | **Accurate (OpenFOAM)**, the default: OpenFOAM v2606 in Docker (snappyHexMesh, steady RANS k-ω SST, MRF for spinning parts) on the CPU queue with `cpu_threads` cores. Propeller thrust within ~3 %, torque ~7 %; sphere drag 0.2–1.3 %. ~4 / 10 / 26 min for a 3-inch prop at Draft / Normal / Fine. | **Quick preview (GPU)**: the lattice-Boltzmann tunnel. Still parts: drag within ~3 % on simple shapes at low Reynolds number, less certain above; spinning parts: a rough picture only, thrust can be 30–60 % off. Every preview's headline, `preview_note`, first warning and `accuracy` say so. |
+| strength | **CalculiX check**: the same mesh, loads and supports solved by CalculiX 2.21 in Docker (geometrically nonlinear when a held part spins); the summary's `check` compares it with the latest SimLab run of the same setup. | SimLab's own solver, the default. |
+| propeller | – | blade element model, the only engine |
+
+A spinning wind config may leave out `spin.center_mm`: the engine then uses
+the hub the model analysis found (`suggestions.prop.center_mm`), not the
+bounding-box centre (on a 3-blade prop the box centre is several mm off the
+hub). A centre that is given is kept; the run warns when it is over 1 mm
+from the detected hub.
+
+Queues: one GPU job at a time (quick previews); one CPU job at a time
+(strength tests, OpenFOAM, CalculiX), so two never fight over the cores;
+propeller runs (under a second) have their own queue.
+
+```
+Estimate = { fits, memory_bytes, budget_bytes, size: { elements?, nodes?, dofs?, cells? }, seconds, note,
+             engine?, label?, available?, docker_ready?,
+             engines?: { reference: Estimate, native: Estimate } }   // wind tunnel: both, for the choice
+```
+For OpenFOAM `budget_bytes` is Docker's memory and `cells` the expected final
+mesh; time and memory are calibrated on the validation runs (see
+`crates/engine/src/wind.rs`). For the GPU it is the memory budget setting.
+
 ```
 Study = { id, project_id, model_id, name, kind: "strength"|"wind"|"prop",
           config: StudyConfig, created_at, updated_at, runs: RunBrief[] }
-RunBrief = { id, status, engine, progress, created_at, finished_at?, headline? }
+RunBrief = { id, status, engine: "native"|"reference", progress, created_at, finished_at?, headline?, short?, verdict? }
 Run = RunBrief & {
   study_id, message, started_at?, config: StudyConfig (as run), material?: Material,
   summary?: StrengthSummary | WindSummary | PropSummary,
@@ -91,6 +126,16 @@ Slice = { name, label, origin_mm, u_mm, v_mm (axis vectors whose length is the s
           nu, nv, fields: { name, label, unit, min, max }[] }
 ```
 
+Wind results (both engines): the result surface is the model's surface;
+fields `pressure` (Pa above ambient, per vertex; for display, forces come
+from the solver) and, for the GPU, `cp`. Slices: still parts `side` (wind ×
+lift) and `top` (wind × side); spinning parts `axial` (through the spin
+axis) and `disc` (the rotor plane); fields `speed` (m/s) and `pressure`
+(Pa), plus `u`/`v` from the GPU. Live metrics while running: OpenFOAM
+`residual_U`, `residual_p`, `residual_k`, `residual_omega` and `thrust_n`,
+`torque_nm` (spinning) or `drag_n`, `lift_n`, `side_n`; the GPU `thrust_n`,
+`torque_nm` or `drag_n`, `lift_n`.
+
 Summaries (all also carry `headline`: one plain sentence, e.g. "Safe: 3.1× stronger than this load needs" or "Breaks at about 28,500 rpm, at the blade root"):
 
 ```
@@ -98,10 +143,17 @@ StrengthSummary = { kind: "strength", headline, verdict: "safe"|"marginal"|"brea
   safety_factor, max_von_mises_mpa, max_principal_mpa, max_displacement_mm,
   critical_point_mm, critical_patch?, breaks_at?: { load_factor, rpm?, text },
   mass_g, elements, nodes, dofs, solver, solve_seconds, mesh_seconds,
-  reactions_n?: [x,y,z], warnings: string[] }
-WindSummary = { kind: "wind", headline, force_n: [x,y,z], moment_nm: [x,y,z],
-  drag_n, lift_n, side_n, cd?, ref_area_mm2, thrust_n?, torque_nm?, power_w?,
-  reynolds, cells, steps, mlups, seconds, converged, warnings }
+  reactions_n?: [x,y,z], warnings: string[], accuracy,
+  engine?, check?: { native_run_id, text, agrees, native: {max_von_mises_mpa, safety_factor, max_displacement_mm},
+                     calculix: {...}, diff_pct: {max_von_mises, safety_factor, max_displacement} } }   // CalculiX checks
+WindSummary = { kind: "wind", engine: "reference"|"native", method: "Accurate (OpenFOAM)"|"Quick preview (GPU)",
+  headline, short, force_n: [x,y,z], moment_nm: [x,y,z],
+  drag_n, lift_n, side_n, cd?, ref_area_mm2, thrust_n?, thrust_g?, torque_nm?, power_w?, rpm?,
+  reynolds, cells, steps, seconds, converged, warnings, accuracy,
+  preview_note?,                                  // quick previews: how rough, in one sentence
+  mlups?,                                         // GPU
+  iterations?, averaged_over?, turbulence?, y_plus?: [min, avg, max], moment_center_mm?, case_dir? }   // OpenFOAM
+Accuracy = { method, checked_against, typical_error }   // "How sure" in the UI
 PropSummary = { kind: "prop", headline, blades, radius_mm, hub_radius_mm, rotation: "cw"|"ccw",
   geometry: { r_mm, chord_mm, pitch_deg }[],
   points: { rpm, airspeed_m_s, thrust_n, thrust_g, torque_nm, power_w, ct, cp, efficiency? }[],
@@ -125,7 +177,9 @@ PropSummary = { kind: "prop", headline, blades, radius_mm, hub_radius_mm, rotati
 `POST /mcp` (Streamable HTTP, JSON responses) and `simlab-engine mcp` (stdio).
 Tools mirror the API: list/create projects, import a model from a file path,
 describe a model's patches, list materials and motors, create and run studies,
-wait for a run, read summaries and field statistics, compare runs.
+wait for a run, read summaries and field statistics, compare runs. The tool
+descriptions tell Claude that wind tunnel runs default to Accurate (OpenFOAM)
+and that `engine: "native"` is only a quick preview.
 
 ## Areas picked by shape (regions)
 

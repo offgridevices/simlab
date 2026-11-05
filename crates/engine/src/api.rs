@@ -19,18 +19,29 @@ use tokio_stream::wrappers::BroadcastStream;
 
 pub type S = State<Arc<App>>;
 
-pub struct ApiError(StatusCode, String);
+pub struct ApiError(StatusCode, String, Option<Value>);
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"error": self.1}))).into_response()
+        let mut body = json!({"error": self.1});
+        if let Some(n) = self.2 {
+            body["needs"] = n;
+        }
+        (self.0, Json(body)).into_response()
     }
 }
 impl From<anyhow::Error> for ApiError {
     fn from(e: anyhow::Error) -> Self {
+        // a run that needs Docker first: 409 with the check to fix (the UI asks)
+        if let Some(n) = e.downcast_ref::<jobs::NeedsSetup>() {
+            return ApiError(StatusCode::CONFLICT, crate::system::DOCKER_NEEDED.into(), serde_json::to_value(&n.check).ok());
+        }
         let msg = format!("{e:#}");
         let code = if msg.starts_with("no ") { StatusCode::NOT_FOUND } else { StatusCode::BAD_REQUEST };
-        ApiError(code, msg)
+        ApiError(code, msg, None)
     }
+}
+fn err(code: StatusCode, msg: impl Into<String>) -> ApiError {
+    ApiError(code, msg.into(), None)
 }
 type R<T> = Result<T, ApiError>;
 
@@ -132,7 +143,7 @@ async fn system_fix(State(app): S, Json(b): Json<FixBody>) -> R<Json<Value>> {
 
 async fn system_update(State(app): S) -> R<Json<Value>> {
     let app2 = app.clone();
-    let r = tokio::task::spawn_blocking(move || system::update(&app2)).await.map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let r = tokio::task::spawn_blocking(move || system::update(&app2)).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok(Json(json!({"message": r.message, "url": r.url, "latest": r.latest})))
 }
 
@@ -165,7 +176,7 @@ async fn materials(State(app): S) -> Json<Vec<Value>> {
 }
 async fn add_material(State(app): S, Json(mut m): Json<Material>) -> R<Json<Value>> {
     if m.e_xy_mpa <= 0.0 || m.e_z_mpa <= 0.0 || m.uts_xy_mpa <= 0.0 || m.uts_z_mpa <= 0.0 || m.density <= 0.0 || !(0.0..0.5).contains(&m.nu) {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "stiffness, strength and density must be above zero, Poisson's ratio between 0 and 0.5".into()));
+        return Err(err(StatusCode::BAD_REQUEST, "stiffness, strength and density must be above zero, Poisson's ratio between 0 and 0.5"));
     }
     if m.id.is_empty() || simlab_core::builtin_materials().iter().any(|b| b.id == m.id) {
         m.id = format!("custom-{}", new_id());
@@ -278,7 +289,7 @@ async fn delete_project(State(app): S, Path(id): Path<String>) -> R<StatusCode> 
     let runs = app.db().runs_for_project(&id)?;
     for r in runs {
         jobs::stop(&app, &r.id);
-        let _ = std::fs::remove_dir_all(app.run_dir(&r.id));
+        jobs::remove_run_files(&app, &r.id);
     }
     app.db().delete_project(&id)?;
     let _ = std::fs::remove_dir_all(app.data.join("projects").join(&id));
@@ -290,11 +301,11 @@ async fn delete_project(State(app): S, Path(id): Path<String>) -> R<StatusCode> 
 
 async fn upload_model(State(app): S, Path(pid): Path<String>, mut mp: Multipart) -> R<Json<Value>> {
     let (mut file, mut name, mut unit_mm) = (None, None, 1.0f64);
-    while let Some(field) = mp.next_field().await.map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))? {
+    while let Some(field) = mp.next_field().await.map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))? {
         match field.name() {
             Some("file") => {
                 let fname = field.file_name().unwrap_or("part.stl").to_string();
-                let bytes = field.bytes().await.map_err(|e| ApiError(StatusCode::BAD_REQUEST, e.to_string()))?;
+                let bytes = field.bytes().await.map_err(|e| err(StatusCode::BAD_REQUEST, e.to_string()))?;
                 file = Some((fname, bytes));
             }
             Some("name") => name = Some(field.text().await.unwrap_or_default()),
@@ -302,7 +313,7 @@ async fn upload_model(State(app): S, Path(pid): Path<String>, mut mp: Multipart)
             _ => {}
         }
     }
-    let (fname, bytes) = file.ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "no file in the upload".into()))?;
+    let (fname, bytes) = file.ok_or_else(|| err(StatusCode::BAD_REQUEST, "no file in the upload"))?;
     let m = models::create(&app, &pid, &fname, name, unit_mm, &bytes)?;
     app.emit(json!({"type": "model", "model": m.to_json()}));
     app.emit(json!({"type": "project", "project_id": pid}));
@@ -371,17 +382,21 @@ async fn delete_model(State(app): S, Path(id): Path<String>) -> R<StatusCode> {
 }
 
 fn binary(path: std::path::PathBuf) -> R<Response> {
-    let bytes = std::fs::read(&path).map_err(|_| ApiError(StatusCode::NOT_FOUND, "no such buffer".into()))?;
+    let bytes = std::fs::read(&path).map_err(|_| err(StatusCode::NOT_FOUND, "no such buffer"))?;
     let mut h = HeaderMap::new();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     Ok((h, Body::from(bytes)).into_response())
 }
+/// A file-name piece the API may put in a path: letters, digits, _ . - and no "..".
+pub fn safe_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-') && !name.contains("..")
+}
 fn safe(name: &str) -> R<&str> {
-    if name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.' || c == '-') && !name.contains("..") {
+    if safe_name(name) {
         Ok(name)
     } else {
-        Err(ApiError(StatusCode::BAD_REQUEST, "bad name".into()))
+        Err(err(StatusCode::BAD_REQUEST, "bad name"))
     }
 }
 
@@ -389,7 +404,7 @@ async fn model_surface(State(app): S, Path((id, buf)): Path<(String, String)>) -
     let m = app.db().model(&id)?;
     let buf = safe(&buf)?;
     if !["positions.f32", "normals.f32", "indices.u32", "patch.u32"].contains(&buf) {
-        return Err(ApiError(StatusCode::NOT_FOUND, "no such buffer".into()));
+        return Err(err(StatusCode::NOT_FOUND, "no such buffer"));
     }
     binary(app.model_dir(&m.project_id, &id).join(format!("surface.{buf}")))
 }
@@ -423,8 +438,17 @@ pub fn kind_of(c: &StudyConfig) -> &'static str {
 pub fn parse_config(v: &Value) -> anyhow::Result<StudyConfig> {
     serde_json::from_value(v.clone()).map_err(|e| anyhow::anyhow!("the test settings are not valid: {e}"))
 }
+/// Fills what the engine works out for a config before it is stored: a
+/// spinning wind test without `spin.center_mm` turns about the hub the
+/// model analysis found. A centre the caller gave is kept as is.
+pub fn complete_config(app: &App, model_id: &str, mut config: Value) -> anyhow::Result<StudyConfig> {
+    let m = app.db().model(model_id)?;
+    crate::wind::fill_spin_center(&m, &mut config);
+    parse_config(&config)
+}
+
 pub fn create_study_row(app: &App, pid: &str, model_id: &str, name: Option<String>, config: Value) -> anyhow::Result<StudyRow> {
-    let cfg = parse_config(&config)?;
+    let cfg = complete_config(app, model_id, config)?;
     let m = app.db().model(model_id)?;
     if m.project_id != pid {
         anyhow::bail!("that model belongs to another project");
@@ -469,9 +493,9 @@ async fn patch_study(State(app): S, Path(id): Path<String>, Json(b): Json<PatchS
         s.name = n;
     }
     if let Some(c) = b.config {
-        let cfg = parse_config(&c)?;
+        let cfg = complete_config(&app, &s.model_id, c)?;
         if kind_of(&cfg) != s.kind {
-            return Err(ApiError(StatusCode::BAD_REQUEST, "a test cannot change its kind; make a new one".into()));
+            return Err(err(StatusCode::BAD_REQUEST, "a test cannot change its kind; make a new one"));
         }
         s.config = serde_json::to_value(cfg).unwrap();
     }
@@ -483,25 +507,37 @@ async fn delete_study(State(app): S, Path(id): Path<String>) -> R<StatusCode> {
     let s = app.db().study(&id)?;
     for r in app.db().runs(&id)? {
         jobs::stop(&app, &r.id);
-        let _ = std::fs::remove_dir_all(app.run_dir(&r.id));
+        jobs::remove_run_files(&app, &r.id);
     }
     app.db().delete_study(&id)?;
     app.emit(json!({"type": "project", "project_id": s.project_id}));
     Ok(StatusCode::NO_CONTENT)
 }
-async fn estimate(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
+/// `{ engine? }`: "reference" (Accurate) or "native"; omitted, the kind's default
+#[derive(Deserialize, Default)]
+struct EngineBody {
+    engine: Option<String>,
+}
+/// The engine from an optional JSON body (empty or missing is fine).
+fn engine_of(body: &[u8]) -> R<Option<String>> {
+    if body.iter().all(|b| b.is_ascii_whitespace()) {
+        return Ok(None);
+    }
+    let b: EngineBody = serde_json::from_slice(body).map_err(|e| err(StatusCode::BAD_REQUEST, format!("bad request body: {e}")))?;
+    Ok(b.engine)
+}
+async fn estimate(State(app): S, Path(id): Path<String>, body: axum::body::Bytes) -> R<Json<Value>> {
     let app2 = app.clone();
-    let v = tokio::task::spawn_blocking(move || jobs::estimate(&app2, &id)).await.map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    let engine = engine_of(&body)?;
+    let v = tokio::task::spawn_blocking(move || jobs::estimate(&app2, &id, engine.as_deref())).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok(Json(v))
 }
 
-#[derive(Deserialize, Default)]
-struct StartRun {
-    engine: Option<String>,
-}
-async fn start_run(State(app): S, Path(id): Path<String>, body: Option<Json<StartRun>>) -> R<Json<Value>> {
-    let engine = body.and_then(|b| b.0.engine).unwrap_or_else(|| "native".into());
-    let r = jobs::enqueue(&app, &id, &engine)?;
+async fn start_run(State(app): S, Path(id): Path<String>, body: axum::body::Bytes) -> R<Json<Value>> {
+    let engine = engine_of(&body)?;
+    let app2 = app.clone();
+    // the Docker check behind a reference run runs programs: keep it off the async threads
+    let r = tokio::task::spawn_blocking(move || jobs::enqueue(&app2, &id, engine.as_deref())).await.map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok(Json(run_json(&app, &r)))
 }
 
@@ -530,7 +566,7 @@ async fn delete_run(State(app): S, Path(id): Path<String>) -> R<StatusCode> {
     let r = app.db().run(&id)?;
     jobs::stop(&app, &id);
     app.db().delete_run(&id)?;
-    let _ = std::fs::remove_dir_all(app.run_dir(&id));
+    jobs::remove_run_files(&app, &id);
     let study = app.db().study(&r.study_id);
     if let Ok(s) = study {
         app.emit(json!({"type": "project", "project_id": s.project_id}));
@@ -548,8 +584,8 @@ async fn run_field(State(app): S, Path((id, name)): Path<(String, String)>) -> R
 }
 async fn run_slice(State(app): S, Path((id, name)): Path<(String, String)>) -> R<Json<Value>> {
     let name = safe(&name)?;
-    let b = std::fs::read(app.run_dir(&id).join(format!("slice.{name}.json"))).map_err(|_| ApiError(StatusCode::NOT_FOUND, "no such slice".into()))?;
-    Ok(Json(serde_json::from_slice(&b).map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?))
+    let b = std::fs::read(app.run_dir(&id).join(format!("slice.{name}.json"))).map_err(|_| err(StatusCode::NOT_FOUND, "no such slice"))?;
+    Ok(Json(serde_json::from_slice(&b).map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?))
 }
 async fn run_slice_field(State(app): S, Path((id, name, field)): Path<(String, String, String)>) -> R<Response> {
     let (name, field) = (safe(&name)?, safe(&field)?);

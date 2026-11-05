@@ -80,6 +80,26 @@ pub fn docker_running() -> bool {
 
 pub const REFERENCE_IMAGE: &str = "simlab-reference:1";
 
+/// What a run that needs Docker says when it is not there.
+pub const DOCKER_NEEDED: &str = "Accurate air tests and CalculiX checks run OpenFOAM and CalculiX in Docker, and Docker is not ready. Open Settings → System check and press Start Colima (or Build reference image), then run the test again.";
+
+/// Cores and memory (bytes) of the Docker VM, when it is running.
+pub fn docker_vm() -> (Option<usize>, Option<u64>) {
+    let Some(docker) = find_program("docker") else { return (None, None) };
+    let Ok(out) = Command::new(docker).envs(docker_env()).args(["info", "--format", "{{.NCPU}} {{.MemTotal}}"]).output() else { return (None, None) };
+    if !out.status.success() {
+        return (None, None);
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut it = text.split_whitespace();
+    (it.next().and_then(|v| v.parse().ok()), it.next().and_then(|v| v.parse().ok()))
+}
+
+/// Docker is running and has SimLab's reference image (both quick).
+pub fn reference_ready() -> bool {
+    docker_running() && reference_image_present()
+}
+
 pub fn reference_image_present() -> bool {
     let Some(docker) = find_program("docker") else { return false };
     Command::new(docker).envs(docker_env()).args(["image", "inspect", REFERENCE_IMAGE]).output().map(|o| o.status.success()).unwrap_or(false)
@@ -92,8 +112,8 @@ pub fn run_checks(app: &App) -> Vec<Check> {
     out.push(check("machine", "This Mac", "ok", format!("{} · {} cores · {:.0} GB memory", cpu_name(), cores(), ram as f64 / GIB), None));
 
     match crate::solve::gpu_info() {
-        Ok(g) => out.push(check("gpu", "Graphics chip (wind tunnel)", "ok", g, None)),
-        Err(e) => out.push(check("gpu", "Graphics chip (wind tunnel)", "error", format!("No usable GPU: {e}. The wind tunnel cannot run."), None)),
+        Ok(g) => out.push(check("gpu", "Graphics chip (quick air previews)", "ok", g, None)),
+        Err(e) => out.push(check("gpu", "Graphics chip (quick air previews)", "error", format!("No usable GPU: {e:#}. Quick air previews cannot run; accurate air tests still can."), None)),
     }
 
     // the mesher: uv + a hash-locked Gmsh in SimLab's own folder
@@ -128,45 +148,7 @@ pub fn run_checks(app: &App) -> Vec<Check> {
         ));
     }
 
-    // reference engines in Docker (optional)
-    let docker = find_program("docker");
-    let colima = find_program("colima");
-    if docker.is_none() {
-        out.push(check(
-            "docker",
-            "Docker (optional, for reference runs)",
-            "optional",
-            "Not installed. SimLab works without it; reference runs with CalculiX and OpenFOAM need it. To add it: brew install colima docker",
-            None,
-        ));
-    } else if !docker_running() {
-        out.push(check(
-            "docker",
-            "Docker (optional, for reference runs)",
-            "optional",
-            if colima.is_some() { "Installed (Colima) but not running. SimLab starts it only for a reference run." } else { "Installed but not running." },
-            colima.map(|_| Fix {
-                label: "Start Colima".into(),
-                asks: {
-                    let (cpu, mem) = colima_profile().unwrap_or((COLIMA_NEW_CPU, COLIMA_NEW_MEMORY_GB));
-                    format!("Start Colima now? It runs a small Linux machine using up to {mem} GB of memory and {cpu} CPU cores (your Colima settings) until you stop it or quit SimLab.")
-                },
-            }),
-        ));
-    } else if !reference_image_present() {
-        out.push(check(
-            "docker",
-            "Reference engines (CalculiX + OpenFOAM)",
-            "optional",
-            "Docker is running; the reference image is not built yet.",
-            Some(Fix {
-                label: "Build reference image".into(),
-                asks: "Build SimLab's reference image? It downloads OpenFOAM v2606 (OpenCFD's official image) and CalculiX 2.21 (Ubuntu's signed package), about 1.2 GB, and takes a few minutes.".into(),
-            }),
-        ));
-    } else {
-        out.push(check("docker", "Reference engines (CalculiX + OpenFOAM)", "ok", "Ready in Docker", None));
-    }
+    out.push(docker_check());
 
     let free = disk_free(&app.data);
     out.push(check(
@@ -179,12 +161,77 @@ pub fn run_checks(app: &App) -> Vec<Check> {
     out
 }
 
+/// The Docker line of the system check: needed for accurate air tests
+/// (OpenFOAM) and CalculiX checks; strength and propeller tests work without it.
+pub fn docker_check() -> Check {
+    let docker = find_program("docker");
+    let colima = find_program("colima");
+    const LABEL: &str = "Docker (needed for accurate air tests)";
+    if docker.is_none() {
+        check(
+            "docker",
+            LABEL,
+            "missing",
+            "Not installed. Accurate air tests (OpenFOAM) and CalculiX double-checks run in it; strength and propeller tests work without it. To add it: brew install colima docker",
+            None,
+        )
+    } else if !docker_running() {
+        check(
+            "docker",
+            LABEL,
+            "missing",
+            if colima.is_some() {
+                "Installed (Colima) but not running. Accurate air tests need it; strength and propeller tests work without it."
+            } else {
+                "Installed but not running. Start Docker to run accurate air tests."
+            },
+            colima.map(|_| Fix {
+                label: "Start Colima".into(),
+                asks: {
+                    let (cpu, mem) = colima_profile().unwrap_or((COLIMA_NEW_CPU, COLIMA_NEW_MEMORY_GB));
+                    format!("Start Colima now? It runs a small Linux machine using up to {mem} GB of memory and {cpu} CPU cores (your Colima settings) until you stop it or quit SimLab.")
+                },
+            }),
+        )
+    } else if !reference_image_present() {
+        check(
+            "docker",
+            "Accurate air tests (OpenFOAM + CalculiX)",
+            "missing",
+            "Docker is running; SimLab's reference image is not built yet. Accurate air tests need it.",
+            Some(Fix {
+                label: "Build reference image".into(),
+                asks: "Build SimLab's reference image? It downloads OpenFOAM v2606 (OpenCFD's official image) and CalculiX 2.21 (Ubuntu's signed package), about 1.2 GB, and takes a few minutes.".into(),
+            }),
+        )
+    } else {
+        let (cpus, mem) = docker_vm();
+        let size = match (cpus, mem) {
+            (Some(c), Some(m)) => format!(" · {c} cores, {:.0} GB", m as f64 / GIB),
+            _ => String::new(),
+        };
+        check("docker", "Accurate air tests (OpenFOAM + CalculiX)", "ok", format!("Ready in Docker{size}"), None)
+    }
+}
+
 fn disk_free(p: &std::path::Path) -> u64 {
     let out = Command::new("/bin/df").arg("-k").arg(p).output();
     out.ok()
         .and_then(|o| String::from_utf8_lossy(&o.stdout).lines().nth(1).and_then(|l| l.split_whitespace().nth(3).and_then(|s| s.parse::<u64>().ok())))
         .map(|kb| kb * 1024)
         .unwrap_or(0)
+}
+
+/// Re-checks Docker alone (quick) and tells the UI.
+pub fn refresh_docker(app: &App) -> Check {
+    let c = docker_check();
+    let mut checks = app.checks.lock().unwrap_or_else(|e| e.into_inner());
+    match checks.iter_mut().find(|x| x.id == "docker") {
+        Some(x) => *x = c.clone(),
+        None => checks.push(c.clone()),
+    }
+    app.emit(json!({"type": "check", "check": c}));
+    c
 }
 
 pub fn refresh(app: &Arc<App>) {
@@ -239,7 +286,14 @@ pub fn fix(app: &Arc<App>, id: &str) -> anyhow::Result<()> {
             if colima_profile().is_none() {
                 cmd.args(["--cpu", &COLIMA_NEW_CPU.to_string(), "--memory", &COLIMA_NEW_MEMORY_GB.to_string(), "--vm-type", "vz"]);
             }
-            run_ok(&mut cmd)
+            let r = run_ok(&mut cmd);
+            if r.is_ok() {
+                // ours to stop when SimLab quits; a Colima that was already
+                // running is left alone
+                app.started_colima.store(true, std::sync::atomic::Ordering::SeqCst);
+                kill_stale_containers();
+            }
+            r
         }
         "docker" => {
             set_working(app, id, "Building the reference image (a few minutes)…");
@@ -249,6 +303,49 @@ pub fn fix(app: &Arc<App>, id: &str) -> anyhow::Result<()> {
     };
     refresh(app);
     result
+}
+
+/// Kills reference containers (OpenFOAM, CalculiX) left by an engine that
+/// quit mid-run. Quick, and harmless when Docker is not running.
+pub fn kill_stale_containers() -> usize {
+    if !docker_running() {
+        return 0;
+    }
+    let n = simlab_reference::kill_stale_containers(&reference_options());
+    if n > 0 {
+        eprintln!("stopped {n} leftover reference container(s)");
+    }
+    n
+}
+
+/// Docker CLI and image for the reference runs, found the same way as the checks.
+pub fn reference_options() -> simlab_reference::RunOptions {
+    let mut o = simlab_reference::RunOptions::default();
+    if let Some(d) = find_program("docker") {
+        o.docker = d;
+    }
+    o.env = docker_env();
+    o
+}
+
+/// The engine is about to exit (quit, SIGTERM, the app went away, idle):
+/// stop reference containers, and Colima if SimLab started it. Colima's
+/// stop runs on its own, so the app's few seconds' wait never cuts it off.
+pub fn shutdown(app: &App) {
+    kill_stale_containers();
+    if app.started_colima.swap(false, std::sync::atomic::Ordering::SeqCst)
+        && let Some(colima) = find_program("colima")
+    {
+        use std::os::unix::process::CommandExt;
+        eprintln!("stopping Colima (SimLab started it)");
+        let _ = Command::new(colima)
+            .arg("stop")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0)
+            .spawn();
+    }
 }
 
 pub fn setup_mesher(app: &App) -> anyhow::Result<()> {

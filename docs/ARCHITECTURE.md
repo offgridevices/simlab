@@ -12,14 +12,18 @@ SimLab.app (Tauri v2 window, macOS WebKit)
         ├─ HTTP API + live events (/api, /events)      ← the web UI (web/)
         ├─ MCP server (/mcp, and `simlab-engine mcp`)   ← Claude Code / Claude Desktop
         ├─ SQLite store + files (~/Library/Application Support/SimLab)
-        ├─ job queue: one GPU job and one CPU job at a time
+        ├─ job queues: one GPU job (quick air preview), one CPU job (strength,
+        │              OpenFOAM or CalculiX) and propeller runs, each one at a time
         ├─ crates/fea    stress test: quadratic tetrahedra (tet10), CPU, all cores
-        ├─ crates/cfd    wind tunnel: lattice Boltzmann on the GPU (Metal via wgpu)
+        ├─ crates/reference  accurate air tests: OpenFOAM v2606 in Docker (the default)
+        ├─ crates/cfd    quick air previews: lattice Boltzmann on the GPU (Metal via wgpu)
         ├─ crates/prop   propeller performance: blade element momentum theory
         ├─ mesher/       Gmsh (official PyPI wheel, hash-locked by uv) for
         │                STEP/STL → surface patches and tet10 volume meshes
-        └─ docker/       optional reference runs: CalculiX + OpenFOAM from
-                         Debian's signed packages, in Colima/Docker
+        └─ docker/       the simlab-reference:1 image: OpenFOAM v2606 + CalculiX
+                         2.21, run in Colima/Docker (needed for accurate air
+                         tests and CalculiX checks; strength and propeller
+                         tests work without it)
 ```
 
 Quitting the app stops the engine; nothing runs in the background. All data
@@ -32,7 +36,8 @@ updates and reinstalls.
 |---|---|
 | `crates/core` (`simlab-core`) | shared types: meshes, materials, study configs, result buffers, units. No heavy deps. |
 | `crates/fea` (`simlab-fea`) | linear elastic FEA on tet10 meshes: anisotropic (print direction) materials, fixed supports, forces, pressures, motor loads, gravity/g-loads, spin (centrifugal), inertia relief for free-flying parts, Tsai-Hill failure index, safety factor, "breaks at" load. Sparse Cholesky (faer) with a PCG fallback when memory is short. CalculiX `.inp` export for reference runs. |
-| `crates/cfd` (`simlab-cfd`) | D3Q19 lattice Boltzmann on the GPU (wgpu → Metal) with LES turbulence, interpolated bounce-back for static parts, moving-wall bounce-back for spinning ones, momentum-exchange forces, surface pressure, flow slices. |
+| `crates/reference` (`simlab-reference`) | the Accurate air test: plans and writes an OpenFOAM case (snappyHexMesh, simpleFoam k-ω SST, MRF for spinning parts), runs it in Docker with live progress, stops early once the forces settle, reads forces, surface pressure and slices back. |
+| `crates/cfd` (`simlab-cfd`) | the Quick air preview: D3Q19 lattice Boltzmann on the GPU (wgpu → Metal) with LES turbulence, interpolated bounce-back for static parts, moving-wall bounce-back for spinning ones, momentum-exchange forces, surface pressure, flow slices. |
 | `crates/prop` (`simlab-prop`) | reads blade chord and twist from the mesh at radial stations, then BEMT with Prandtl tip loss and low-Reynolds airfoil polars: thrust, torque, power, efficiency vs RPM and airspeed; also the spanwise load used by the prop stress test. |
 | `crates/engine` (`simlab-engine`) | axum server, SQLite, job runner, mesher calls, system check, MCP. The binary. |
 | `app/` | Tauri shell: opens a window on the engine. |
@@ -80,8 +85,13 @@ reproducible and comparable.
 3. **Propeller** (`prop`): RPM range and airspeed. Results: thrust, torque,
    power and efficiency curves, spanwise loads.
 
-Each run records which engine solved it: `native` (built in) or `calculix` /
-`openfoam` (reference, in Docker).
+Each run records which engine solved it: `reference` (wind tunnel:
+Accurate, OpenFOAM, the default; strength: the CalculiX check) or `native`
+(wind tunnel: Quick preview on the GPU; strength and propeller: SimLab's own
+solvers, the default). OpenFOAM cases live in the run's folder when the data
+folder is under the home folder (Colima only shares that), otherwise in
+`~/Library/Caches/com.offgridevices.simlab/reference/<run>`; CalculiX
+streams its deck and results through the container, so it needs no folder.
 
 ## Performance and memory
 

@@ -1,5 +1,7 @@
-//! The bridge between runs and the solver crates. The only file that calls
-//! simlab-fea, simlab-cfd and simlab-prop.
+//! The bridge between runs and the solver crates: this file, wind.rs (air
+//! tests: OpenFOAM and the GPU tunnel) and calculix.rs (the strength
+//! double-check) are the only ones that call simlab-fea, simlab-cfd,
+//! simlab-prop and simlab-reference.
 
 use crate::jobs::{Ctx, Outcome};
 use crate::db::{ModelRow, RunRow};
@@ -8,8 +10,9 @@ use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use simlab_core::{Load, MeshQuality, Progress, PropConfig, StrengthConfig, StudyConfig, TetMesh, TriMesh, Vec3};
 
+/// The graphics chip the quick air previews run on.
 pub fn gpu_info() -> Result<String> {
-    bail!("wind tunnel not built yet")
+    simlab_cfd::gpu_info()
 }
 
 /// A propeller guess for the UI, from a model surface in mm.
@@ -31,7 +34,9 @@ pub fn run(ctx: &Ctx, r: &RunRow) -> Result<Outcome> {
     match (&cfg, r.engine.as_str()) {
         (StudyConfig::Prop(c), _) => prop(ctx, &model, c),
         (StudyConfig::Strength(c), "native") => strength(ctx, r, &model, c),
-        _ => bail!("this test type is not connected yet"),
+        (StudyConfig::Strength(c), "reference") => crate::calculix::run(ctx, r, &model, c),
+        (StudyConfig::Wind(c), "native" | "reference") => crate::wind::run(ctx, r, &model, c),
+        (_, e) => bail!("unknown engine {e}"),
     }
 }
 
@@ -47,6 +52,11 @@ fn accuracy(kind: &str) -> Value {
             "method": "Finite elements (quadratic tetrahedra) with print-direction-aware material and Tsai-Hill failure check",
             "checked_against": "CalculiX 2.21 on the same mesh; textbook and NAFEMS benchmarks",
             "typical_error": "Matches CalculiX within 0.004%; benchmarks within 0.03–0.8%. The real-world limit is how strong your print really is (layer bonding, infill, moisture), so treat a safety factor under 2 as risky.",
+        }),
+        "strength-reference" => json!({
+            "method": "CalculiX 2.21 (in Docker) on the same mesh, loads and supports as SimLab's run; a geometrically nonlinear solve when the part spins and is held, so it stiffens under its own stress as SimLab's solver does",
+            "checked_against": "An independent, widely used finite-element code: this run is the check",
+            "typical_error": "A second opinion on the same model: when it agrees with SimLab's run, the solver is not the problem. Both share the same limit: how strong your print really is (layer bonding, infill, moisture).",
         }),
         _ => Value::Null,
     }
@@ -96,11 +106,12 @@ fn strength_estimate(app: &App, m: &ModelRow, c: &StrengthConfig) -> Result<Valu
         "fits": fits, "memory_bytes": mem, "budget_bytes": budget,
         "size": {"elements": tets, "nodes": nodes, "dofs": est.dofs, "element_mm": h},
         "seconds": solve_s + mesh_s + 1.0,
+        "mesh_seconds": mesh_s,
         "note": if fits { format!("About {} elements of {:.2} mm", group(tets), h) } else { "Too big for the memory budget: pick a coarser quality or raise the budget in Settings".into() },
     }))
 }
 
-fn group(n: usize) -> String {
+pub fn group(n: usize) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -112,8 +123,13 @@ fn group(n: usize) -> String {
     out
 }
 
-fn strength(ctx: &Ctx, r: &RunRow, model: &ModelRow, c: &StrengthConfig) -> Result<Outcome> {
-    let material: simlab_core::Material = serde_json::from_value(r.material.clone().ok_or_else(|| anyhow::anyhow!("no material saved with this run"))?)?;
+pub fn run_material(r: &RunRow) -> Result<simlab_core::Material> {
+    Ok(serde_json::from_value(r.material.clone().ok_or_else(|| anyhow::anyhow!("no material saved with this run"))?)?)
+}
+
+/// A strength mesh for a run: (mesh, element size mm, meshing seconds).
+/// Shared by SimLab's solver and the CalculiX check, so both see the same model.
+pub fn strength_mesh(ctx: &Ctx, model: &ModelRow, c: &StrengthConfig) -> Result<(TetMesh, f64, f64)> {
     let dir = ctx.app.model_dir(&model.project_id, &model.id);
     let h = element_size_mm(&model.info, &c.quality);
     let unit_mm = model.unit_mm;
@@ -173,6 +189,14 @@ fn strength(ctx: &Ctx, r: &RunRow, model: &ModelRow, c: &StrengthConfig) -> Resu
     }
     let mesh_seconds = t0.elapsed().as_secs_f64();
     ctx.log(&format!("mesh: {} elements, {} nodes, element size {h:.3} mm, {mesh_seconds:.1} s", mesh.tets.len(), mesh.nodes.len()));
+    let _ = std::fs::remove_dir_all(&mesh_dir); // big; the run can be repeated
+    let _ = std::fs::remove_dir_all(ctx.dir.join("surface-in"));
+    Ok((mesh, h, mesh_seconds))
+}
+
+fn strength(ctx: &Ctx, r: &RunRow, model: &ModelRow, c: &StrengthConfig) -> Result<Outcome> {
+    let material = run_material(r)?;
+    let (mesh, h, mesh_seconds) = strength_mesh(ctx, model, c)?;
 
     // 2. propeller air loads, from the blade element model
     let tractions = prop_tractions(ctx, model, &mesh, c)?;
@@ -182,7 +206,11 @@ fn strength(ctx: &Ctx, r: &RunRow, model: &ModelRow, c: &StrengthConfig) -> Resu
     let opts = simlab_fea::SolveOptions { memory_budget_bytes: ctx.app.settings().budget_bytes(), ..Default::default() };
     let input = simlab_fea::StrengthInput { mesh: &mesh, material: &material, config: c, model_unit_m: 0.001, face_tractions: tractions.as_deref() };
     let res = simlab_fea::solve_strength(&input, &opts, ctx)?;
+    strength_outcome(ctx, &mesh, &res, h, mesh_seconds, "strength")
+}
 
+/// Writes a strength result (surface, fields in model mm) and its summary.
+pub fn strength_outcome(ctx: &Ctx, mesh: &TetMesh, res: &simlab_fea::StrengthResult, h: f64, mesh_seconds: f64, accuracy_kind: &str) -> Result<Outcome> {
     // 4. write the result surface and its fields (model mm)
     ctx.phase("running", 0.97, 1.0);
     ctx.report(0.0, "Saving results");
@@ -241,16 +269,14 @@ fn strength(ctx: &Ctx, r: &RunRow, model: &ModelRow, c: &StrengthConfig) -> Resu
     }
     summary["mesh_seconds"] = json!(mesh_seconds);
     summary["element_mm"] = json!(h);
-    summary["accuracy"] = accuracy("strength");
+    summary["accuracy"] = accuracy(accuracy_kind);
     // the critical point in model mm
     summary["critical_point_mm"] = json!(simlab_core::scale(res.critical.position_m, 1e3));
-    let _ = std::fs::remove_dir_all(&mesh_dir); // big; the run can be repeated
-    let _ = std::fs::remove_dir_all(ctx.dir.join("surface-in"));
     Ok(Outcome { summary, fields: json!(fields), slices: json!([]) })
 }
 
 /// Air load on a propeller's faces for every PropAero load, from BEMT.
-fn prop_tractions(ctx: &Ctx, model: &ModelRow, mesh: &TetMesh, c: &StrengthConfig) -> Result<Option<Vec<Vec3>>> {
+pub fn prop_tractions(ctx: &Ctx, model: &ModelRow, mesh: &TetMesh, c: &StrengthConfig) -> Result<Option<Vec<Vec3>>> {
     let aero: Vec<&Load> = c.loads.iter().filter(|l| matches!(l, Load::PropAero { .. })).collect();
     if aero.is_empty() {
         return Ok(None);
@@ -286,10 +312,12 @@ fn prop(ctx: &Ctx, model: &ModelRow, c: &PropConfig) -> Result<Outcome> {
     Ok(Outcome { summary, fields: json!([]), slices: json!([]) })
 }
 
-pub fn estimate(app: &App, m: &ModelRow, c: &StudyConfig) -> Result<Value> {
+/// The run's estimate for `engine` ("native" or "reference"), in the API's shape.
+pub fn estimate(app: &App, m: &ModelRow, c: &StudyConfig, engine: &str) -> Result<Value> {
     match c {
+        StudyConfig::Strength(s) if engine == "reference" => crate::calculix::estimate(app, m, s, strength_estimate(app, m, s)?),
         StudyConfig::Strength(s) => strength_estimate(app, m, s),
         StudyConfig::Prop(_) => Ok(json!({"fits": true, "memory_bytes": 50_000_000u64, "budget_bytes": app.settings().budget_bytes(), "size": {}, "seconds": 1.0, "note": "Under a second"})),
-        StudyConfig::Wind(_) => bail!("the wind tunnel is not connected yet"),
+        StudyConfig::Wind(w) => crate::wind::estimate(app, m, w, engine),
     }
 }

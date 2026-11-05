@@ -16,11 +16,16 @@ pub struct App {
     pub resources: Resources,
     pub events: broadcast::Sender<String>,
     pub gpu_queue: mpsc::UnboundedSender<String>,
+    /// one job at a time that uses every core: stress tests, OpenFOAM, CalculiX
     pub cpu_queue: mpsc::UnboundedSender<String>,
+    /// propeller runs (under a second): never stuck behind a long CPU job
+    pub quick_queue: mpsc::UnboundedSender<String>,
     pub stops: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub checks: Mutex<Vec<crate::system::Check>>,
     pub started: std::time::Instant,
     pub last_activity: Mutex<std::time::Instant>,
+    /// SimLab started Colima (so it stops it again when it quits)
+    pub started_colima: AtomicBool,
 }
 
 /// Files that ship with the app: the mesher project and the built web UI.
@@ -64,7 +69,7 @@ pub fn default_data_dir() -> PathBuf {
 }
 
 impl App {
-    pub fn new(data: PathBuf, gpu: mpsc::UnboundedSender<String>, cpu: mpsc::UnboundedSender<String>) -> Result<Arc<App>> {
+    pub fn new(data: PathBuf, gpu: mpsc::UnboundedSender<String>, cpu: mpsc::UnboundedSender<String>, quick: mpsc::UnboundedSender<String>) -> Result<Arc<App>> {
         std::fs::create_dir_all(&data)?;
         for d in ["projects", "runs", "runtime"] {
             std::fs::create_dir_all(data.join(d))?;
@@ -78,10 +83,12 @@ impl App {
             events,
             gpu_queue: gpu,
             cpu_queue: cpu,
+            quick_queue: quick,
             stops: Mutex::new(HashMap::new()),
             checks: Mutex::new(vec![]),
             started: std::time::Instant::now(),
             last_activity: Mutex::new(std::time::Instant::now()),
+            started_colima: AtomicBool::new(false),
         }))
     }
 
@@ -140,6 +147,8 @@ pub struct Settings {
     pub memory_budget_gb: f64,
     pub cpu_threads: usize,
     pub default_units_mm: f64,
+    /// offer "Double-check in CalculiX" on strength results (accurate air
+    /// tests always use OpenFOAM)
     pub reference_engine_enabled: bool,
 }
 impl Default for Settings {

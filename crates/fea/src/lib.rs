@@ -37,7 +37,7 @@ pub mod topo;
 
 pub use material::Elastic;
 pub use solver::{MemoryEstimate, SolveOptions, SolverChoice, SolverReport, Stiffening, estimate_memory};
-pub use strength::{CriticalPoint, InertiaRelief, Peaks, Prepared, StrengthInput, StrengthResult, postprocess, postprocess_with, prepare, prepare_with_bc, solve_prepared, solve_strength};
+pub use strength::{CriticalPoint, InertiaRelief, Peaks, Prepared, StrengthInput, StrengthResult, postprocess, postprocess_reference, postprocess_with, prepare, prepare_with_bc, solve_prepared, solve_strength, stiffening_applies};
 pub use summary::{BreaksAt, NodalField, StrengthSummary, Verdict};
 
 /// Each boundary face of `mesh` (in `mesh.faces` order) as (area-weighted

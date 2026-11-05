@@ -13,6 +13,7 @@ simlab-core.workspace = true
 simlab-fea.workspace = true
 simlab-cfd.workspace = true
 simlab-prop.workspace = true
+simlab-reference.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

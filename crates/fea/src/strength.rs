@@ -705,6 +705,22 @@ pub fn postprocess(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: S
 /// [`postprocess`] for a stress-stiffened solve: `prestress_u` is the
 /// displacement whose stress pre-loaded the operator (for the reactions).
 pub fn postprocess_with(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: SolverReport, prestress_u: Option<Vec<f64>>) -> Result<StrengthResult> {
+    postprocess_full(input, prep, u, solver, prestress_u, None)
+}
+
+/// [`postprocess_with`] for a solution from another solver (CalculiX):
+/// `nodal_stress` (global Voigt, Pa, per node) replaces SimLab's own stress
+/// recovery for the nodal values that drive the headline (peaks, failure
+/// index, safety factor, display fields). Element and Gauss-point measures
+/// (the sharp-corner check, the 99.9th percentile) still come from `u`.
+pub fn postprocess_reference(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: SolverReport, prestress_u: Option<Vec<f64>>, nodal_stress: Vec<[f64; 6]>) -> Result<StrengthResult> {
+    if nodal_stress.len() != input.mesh.nodes.len() {
+        bail!("the reference result has {} nodal stresses for {} nodes", nodal_stress.len(), input.mesh.nodes.len());
+    }
+    postprocess_full(input, prep, u, solver, prestress_u, Some(nodal_stress))
+}
+
+fn postprocess_full(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: SolverReport, prestress_u: Option<Vec<f64>>, nodal_stress: Option<Vec<[f64; 6]>>) -> Result<StrengthResult> {
     let mesh = input.mesh;
     let el = &prep.elastic;
     let n = mesh.nodes.len();
@@ -739,7 +755,11 @@ pub fn postprocess_with(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solv
         // remove the rigid-body part of the motion (mass-weighted)
         remove_rigid_motion(mesh, el.density, &prep.mass, ir.center_m, &mut disp);
     }
-    let st: Stresses = recover(mesh, el, &u);
+    let mut st: Stresses = recover(mesh, el, &u);
+    if let Some(ns) = nodal_stress {
+        // nodes no element uses carry no stress in either solver
+        st.nodal = ns.into_iter().map(|s| if s[0].is_nan() { [0.0; 6] } else { s }).collect();
+    }
     let vm: Vec<f64> = st.nodal.par_iter().map(von_mises).collect();
     let mp: Vec<f64> = st.nodal.par_iter().map(|s| principal(s)[0]).collect();
     let fi: Vec<f64> = st.nodal.par_iter().map(|s| el.failure_index(s)).collect();

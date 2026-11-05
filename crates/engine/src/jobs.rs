@@ -1,5 +1,7 @@
-//! The job runner: two queues (the GPU runs one wind tunnel at a time, the
-//! CPU one stress/propeller/reference job at a time), live progress, stop.
+//! The job runner: three queues (the GPU runs one quick air preview at a
+//! time; the CPU one job that takes every core at a time: a stress test, an
+//! OpenFOAM air test or a CalculiX check; propeller runs, which take under a
+//! second, have their own), live progress, stop.
 
 use crate::api::{find_material, parse_config};
 use crate::db::{RunRow, new_id, now};
@@ -15,18 +17,56 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
 
-pub fn enqueue(app: &Arc<App>, study_id: &str, engine: &str) -> Result<RunRow> {
+/// The engine a run uses when the caller does not pick one: Accurate
+/// (OpenFOAM, "reference") for every wind test, SimLab's own solver for
+/// strength and propeller tests (CalculiX is the optional double-check).
+pub fn default_engine(cfg: &StudyConfig) -> &'static str {
+    match cfg {
+        StudyConfig::Wind(_) => "reference",
+        _ => "native",
+    }
+}
+
+/// A run that cannot start until something is set up (Docker for OpenFOAM
+/// and CalculiX). Carries the system check, whose `fix` is the consent
+/// question to ask; the API answers 409 with it as `needs`.
+#[derive(Debug)]
+pub struct NeedsSetup {
+    pub check: crate::system::Check,
+}
+impl std::fmt::Display for NeedsSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({}: {})", crate::system::DOCKER_NEEDED, self.check.label, self.check.detail)
+    }
+}
+impl std::error::Error for NeedsSetup {}
+
+/// Deletes a run's files, including an OpenFOAM case kept outside the data folder.
+pub fn remove_run_files(app: &App, run_id: &str) {
+    let _ = std::fs::remove_dir_all(crate::wind::case_dir(app, run_id));
+    let _ = std::fs::remove_dir_all(app.run_dir(run_id));
+}
+
+pub fn enqueue(app: &Arc<App>, study_id: &str, engine: Option<&str>) -> Result<RunRow> {
     let s = app.db().study(study_id)?;
     let cfg = parse_config(&s.config)?;
     let m = app.db().model(&s.model_id)?;
     if m.status != "ready" {
         bail!("the model is not ready yet ({})", if m.message.is_empty() { &m.status } else { &m.message });
     }
+    let engine = engine.unwrap_or_else(|| default_engine(&cfg));
     if !matches!(engine, "native" | "reference") {
-        bail!("engine must be native or reference");
+        bail!("engine must be \"reference\" (Accurate: OpenFOAM for air tests, CalculiX for strength) or \"native\" (SimLab's own: quick GPU preview for air tests)");
     }
     if engine == "reference" && matches!(cfg, StudyConfig::Prop(_)) {
-        bail!("the propeller test has no reference engine; use a wind tunnel test with spin for a reference run");
+        bail!("the propeller test has no reference engine; use a wind tunnel test with spin for an accurate (OpenFOAM) run");
+    }
+    if engine == "reference" && !crate::system::reference_ready() {
+        // fail now, with the fix to offer, instead of queueing a run that cannot start
+        let check = crate::system::refresh_docker(app);
+        if check.status != "ok" {
+            return Err(NeedsSetup { check }.into());
+        }
     }
     let material = match &cfg {
         StudyConfig::Strength(c) => Some(serde_json::to_value(find_material(app, &c.material_id)?)?),
@@ -53,8 +93,11 @@ pub fn enqueue(app: &Arc<App>, study_id: &str, engine: &str) -> Result<RunRow> {
     app.db().touch_project(&s.project_id)?;
     std::fs::create_dir_all(app.run_dir(&r.id))?;
     app.stops.lock().unwrap().insert(r.id.clone(), Arc::new(AtomicBool::new(false)));
-    let gpu = matches!(cfg, StudyConfig::Wind(_)) && engine == "native";
-    let q = if gpu { &app.gpu_queue } else { &app.cpu_queue };
+    let q = match (&cfg, engine) {
+        (StudyConfig::Wind(_), "native") => &app.gpu_queue,
+        (StudyConfig::Prop(_), _) => &app.quick_queue,
+        _ => &app.cpu_queue,
+    };
     q.send(r.id.clone())?;
     emit_run(app, &r, &s.project_id);
     Ok(r)
@@ -261,11 +304,13 @@ pub fn human_secs(s: f64) -> String {
     }
 }
 
-pub fn estimate(app: &App, study_id: &str) -> Result<Value> {
+pub fn estimate(app: &App, study_id: &str, engine: Option<&str>) -> Result<Value> {
     let s = app.db().study(study_id)?;
     let m = app.db().model(&s.model_id)?;
     if m.status != "ready" {
         bail!("the model is not ready yet");
     }
-    crate::solve::estimate(app, &m, &parse_config(&s.config)?)
+    let cfg = parse_config(&s.config)?;
+    let engine = engine.unwrap_or_else(|| default_engine(&cfg)).to_string();
+    crate::solve::estimate(app, &m, &cfg, &engine)
 }
