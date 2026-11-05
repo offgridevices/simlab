@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/fea", "crates/cfd", "crates/prop", "crates/engine", "crates/reference"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/offgridevices/simlab"
+
+[workspace.dependencies]
+simlab-core = { path = "crates/core" }
+simlab-fea = { path = "crates/fea" }
+simlab-cfd = { path = "crates/cfd" }
+simlab-prop = { path = "crates/prop" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+rayon = "1"
+bytemuck = { version = "1", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+
+# solver crates stay fast in debug builds and tests
+[profile.dev.package."*"]
+opt-level = 3
+[profile.dev]
+opt-level = 1
+[profile.test]
+opt-level = 3
