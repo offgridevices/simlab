@@ -3,12 +3,17 @@
 //! Docker image. The deck goes in on stdin and the results come back on
 //! stdout, so no folder has to be shared with Docker.
 //!
-//! A held part that spins is solved geometrically nonlinear (`NLGEOM`), so
-//! it stiffens under its own stress the way SimLab's stress-stiffening
-//! passes do; everything else is one linear step. The headline numbers come
-//! from CalculiX's own nodal stresses, with the same rules as SimLab (the
-//! rigidly held faces left out of the peak). The summary compares them with
-//! the latest SimLab run of the same test.
+//! A held part that spins is solved geometrically nonlinear (`NLGEOM`), the
+//! same problem SimLab's stiffening solve answers (both report Cauchy, i.e.
+//! true, stresses then); everything else is one linear step. The headline
+//! numbers come from CalculiX's own nodal stresses, with the same rules as
+//! SimLab (the rigidly held faces left out of the peak). The summary
+//! compares them with the latest SimLab run of the same test.
+//!
+//! CalculiX's equation solver runs on one thread (see
+//! [`simlab_fea::calculix::ccx_env`]: the multi-threaded one gave wrong
+//! answers on real parts), and every result is checked for balancing its
+//! loads before it is shown.
 
 use crate::db::{ModelRow, RunRow};
 use crate::jobs::{Ctx, Outcome};
@@ -55,6 +60,11 @@ pub fn run(ctx: &Ctx, r: &RunRow, model: &ModelRow, c: &StrengthConfig) -> Resul
         ctx.log(&format!("CalculiX gave no displacement for {missing} nodes"));
     }
     let u: Vec<f64> = disp.iter().flat_map(|d| if d[0].is_nan() { [0.0; 3] } else { *d }).collect();
+    // CalculiX's own nodal forces must balance the loads; a solver that lost
+    // accuracy shows up here (a correct solve is ~1e-3: CalculiX integrates
+    // the spin load with fewer points than SimLab)
+    let eq = simlab_fea::calculix::equilibrium_error(&frd, &mesh, &prep, &u, nlgeom).unwrap_or(f64::NAN);
+    ctx.log(&format!("CalculiX equilibrium: largest unbalanced nodal force {:.1e} of the largest load", eq));
     let report = simlab_fea::SolverReport {
         method: "CalculiX 2.21".into(),
         detail: format!("SPOOLES direct solver{}", if nlgeom { ", geometrically nonlinear (stiffens under its own stress)" } else { ", linear" }),
@@ -62,19 +72,35 @@ pub fn run(ctx: &Ctx, r: &RunRow, model: &ModelRow, c: &StrengthConfig) -> Resul
         solve_seconds: seconds,
         ..Default::default()
     };
-    let prestress = nlgeom.then(|| u.clone());
-    let mut res = simlab_fea::postprocess_reference(&input, prep, u, report, prestress, stress)?;
+    let mut res = simlab_fea::postprocess_reference(&input, prep, u, report, nlgeom, stress)?;
     res.timings.total_s = seconds;
     let mut out = crate::solve::strength_outcome(ctx, &mesh, &res, h, mesh_seconds, "strength-reference")?;
     out.summary["engine"] = json!("reference");
     out.summary["method"] = json!("CalculiX check");
     out.summary["nonlinear"] = json!(nlgeom);
+    out.summary["equilibrium_error"] = json!(eq);
+    // NaN (no nodal forces in the results) is not judged, here or in the comparison
+    if eq >= EQUILIBRIUM_LIMIT {
+        let w = format!("CalculiX's answer does not balance its loads (off by {:.0}% of the largest load at one node), so this check is not reliable.", 100.0 * eq);
+        if let Some(a) = out.summary["warnings"].as_array_mut() {
+            a.insert(0, json!(w));
+        }
+    }
     // the comparison goes beside the verdict (the UI's check card, MCP's get_run)
     if let Some(cmp) = compare_with_native(ctx.app, r, &out.summary) {
         out.summary["check"] = cmp;
     }
     Ok(out)
 }
+
+/// Unbalanced nodal force (relative to the largest load) above which a
+/// CalculiX result is flagged; correct solves of the validation cases and
+/// the E-v5 propeller are at 1e-5 to 2e-3, the broken multi-threaded one 40.
+const EQUILIBRIUM_LIMIT: f64 = 0.02;
+
+/// SimLab and CalculiX agree when every headline number is within this
+/// (percent), the owner's target for the same mesh.
+const AGREE_PCT: f64 = 0.1;
 
 /// The latest finished SimLab run of the same test with the same setup,
 /// next to this CalculiX result.
@@ -91,15 +117,26 @@ fn compare_with_native(app: &App, r: &RunRow, ours: &Value) -> Option<Value> {
     let d_sf = pct(get(ours, "safety_factor"), get(s, "safety_factor"));
     let d_u = pct(get(ours, "max_displacement_mm"), get(s, "max_displacement_mm"));
     let worst = [d_vm, d_sf, d_u].iter().flatten().fold(0.0f64, |m, d| m.max(d.abs()));
+    let same_mesh = get(ours, "elements").is_some() && get(ours, "elements") == get(s, "elements");
+    let balanced = ours["equilibrium_error"].as_f64().is_none_or(|e| e < EQUILIBRIUM_LIMIT);
+    let agrees = worst <= AGREE_PCT && balanced;
     let text = match d_vm {
-        Some(d) if worst <= 2.0 => format!("CalculiX agrees with SimLab: peak stress {:+.1}%, safety factor {:+.1}%.", d, d_sf.unwrap_or(0.0)),
-        Some(d) => format!("CalculiX differs from SimLab: peak stress {:+.1}%, safety factor {:+.1}%, movement {:+.1}%.", d, d_sf.unwrap_or(0.0), d_u.unwrap_or(0.0)),
+        _ if !balanced => "CalculiX's answer does not balance its loads, so it cannot check SimLab's this time.".to_string(),
+        Some(d) if agrees => format!("CalculiX agrees with SimLab: peak stress {:+.2}%, safety factor {:+.2}%, movement {:+.2}%.", d, d_sf.unwrap_or(0.0), d_u.unwrap_or(0.0)),
+        Some(d) => format!(
+            "CalculiX differs from SimLab: peak stress {:+.2}%, safety factor {:+.2}%, movement {:+.2}%{}.",
+            d,
+            d_sf.unwrap_or(0.0),
+            d_u.unwrap_or(0.0),
+            if same_mesh { "" } else { " (the two runs were meshed differently)" }
+        ),
         None => return None,
     };
     Some(json!({
         "native_run_id": native.id,
         "text": text,
-        "agrees": worst <= 2.0,
+        "agrees": agrees,
+        "same_mesh": same_mesh,
         "native": {"max_von_mises_mpa": get(s, "max_von_mises_mpa"), "safety_factor": get(s, "safety_factor"), "max_displacement_mm": get(s, "max_displacement_mm"), "elements": get(s, "elements")},
         "calculix": {"max_von_mises_mpa": get(ours, "max_von_mises_mpa"), "safety_factor": get(ours, "safety_factor"), "max_displacement_mm": get(ours, "max_displacement_mm"), "elements": get(ours, "elements")},
         "diff_pct": {"max_von_mises": d_vm, "safety_factor": d_sf, "max_displacement": d_u},
@@ -112,13 +149,12 @@ fn compare_with_native(app: &App, r: &RunRow, ours: &Value) -> Option<Value> {
 fn run_ccx(ctx: &Ctx, deck: &[u8], threads: usize) -> Result<String> {
     let o = crate::system::reference_options();
     let name = format!("simlab-ccx-{}-{}", std::process::id(), ctx.run_id);
-    let t = threads.to_string();
     let script = "cd /tmp && cat > job.inp && ccx -i job 2>&1 | tee ccx.log 1>&2; \
                   if [ ! -s job.frd ] || grep -q 'ERROR' ccx.log; then exit 3; fi; cat job.frd";
     let mut child = Command::new(&o.docker)
         .envs(o.env.iter().cloned())
         .args(["run", "--rm", "-i", "--init", "--name", &name, "--label", "simlab=reference"])
-        .args(["-e", &format!("OMP_NUM_THREADS={t}"), "-e", &format!("CCX_NPROC_STIFFNESS={t}"), "-e", &format!("CCX_NPROC_EQUATION_SOLVER={t}")])
+        .args(simlab_fea::calculix::ccx_env(threads).into_iter().flat_map(|(k, v)| ["-e".to_string(), format!("{k}={v}")]))
         .args(["--entrypoint", "sh", &o.image, "-c", script])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -230,18 +266,20 @@ impl Drop for Kill {
 
 /// CalculiX's time and memory on top of the shared meshing, from SimLab's
 /// estimate of the same mesh. Measured on the E-v5 propeller at Normal
-/// (557 k equations, CalculiX 2.21 with SPOOLES, 12 cores in Colima,
-/// November 2026): one factorization ~15 s; the linear solve took 19 s, the
-/// nonlinear spinning one 225 s (the load in quarter steps, ~6 Newton
-/// passes each; the same answer to 7 digits as one 152 s whole-load
-/// solve, which another time diverged); peak memory 3.9 GB.
+/// (553-557 k equations, CalculiX 2.21, 12 cores in Colima, November 2026):
+/// with the equation solver on one thread (see `ccx_env`) the linear solve
+/// took 40 s and the nonlinear spinning one 660 s (the load in quarter
+/// steps, ~4 Newton passes each), both while an OpenFOAM run shared the
+/// VM; on 12 solver threads they had taken 19 s and 225 s, but wrong. One
+/// whole-load step is faster but stops 0.1 % short of the answer. Peak
+/// memory 3.9 GB.
 pub fn estimate(app: &App, _m: &ModelRow, c: &StrengthConfig, native: Value) -> Result<Value> {
     let mut e = native.clone();
     let dofs = native["size"]["dofs"].as_f64().unwrap_or(0.0).max(1000.0);
     let scale = dofs / 557_000.0;
     // a held part that spins is solved geometrically nonlinear
     let nonlinear = matches!(c.support, simlab_core::Support::Fixed { .. }) && c.loads.iter().any(|l| matches!(l, simlab_core::Load::Spin { .. }));
-    let per_unit = if nonlinear { 220.0 } else { 15.0 };
+    let per_unit = if nonlinear { 500.0 } else { 30.0 };
     let solve = 5.0 + per_unit * scale.powf(1.5);
     let mem = (0.3e9 + 3.6e9 * scale.powf(1.3)) as u64;
     let (_, vm_mem) = crate::system::docker_vm();

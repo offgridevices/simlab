@@ -9,6 +9,17 @@
 //! motor and air tractions and the inertia-relief forces) or entirely as the
 //! nodal forces SimLab computed (`native_loads = false`, which isolates the
 //! solver from load integration).
+//!
+//! A geometrically nonlinear deck (`nlgeom`) is the problem SimLab's
+//! stiffening solve answers: total Lagrangian, CENTRIF on the deformed
+//! shape, every other load fixed in size and direction (so pressure goes in
+//! as nodal forces: CalculiX's `P` would follow the faces as they turn).
+//!
+//! Run CalculiX with [`ccx_env`]: its multi-threaded SPOOLES solver can
+//! return a wrong answer on real meshes (on the E-v5 propeller its own nodal
+//! forces missed the loads by 40× the largest load, next to the held hub);
+//! the single-threaded one is exact to round-off. [`equilibrium_error`]
+//! checks any CalculiX result the same way.
 
 use crate::strength::Prepared;
 use anyhow::{Context, Result, bail};
@@ -37,6 +48,18 @@ impl Default for InpOptions {
     fn default() -> Self {
         InpOptions { heading: "SimLab reference run".into(), native_loads: true, write_reactions: true, nlgeom: false, solver: None }
     }
+}
+
+/// Environment for running `ccx`: element work on `threads` cores, the
+/// equation solver (SPOOLES) on one. CalculiX's multi-threaded SPOOLES gave
+/// a solution whose own nodal forces were 2 N off where the loads are
+/// 0.05 N (E-v5 propeller, 553k equations, 12 threads): stresses next to
+/// the hold 40 % off and the reaction on one side of the hub 8 % off,
+/// while the tip looked right. The serial solver matched SimLab to 3e-6 of
+/// the peak at every node on the same deck, for ~15 s more.
+pub fn ccx_env(threads: usize) -> Vec<(String, String)> {
+    let t = threads.max(1).to_string();
+    vec![("OMP_NUM_THREADS".into(), t.clone()), ("CCX_NPROC_STIFFNESS".into(), t.clone()), ("CCX_NPROC_RESULTS".into(), t), ("CCX_NPROC_EQUATION_SOLVER".into(), "1".into())]
 }
 
 /// Writes a CalculiX deck for a prepared strength problem. Numbers are
@@ -113,8 +136,11 @@ pub fn write_inp<W: Write>(w: &mut W, mesh: &TetMesh, prep: &Prepared, opts: &In
         writeln!(w, "*CONTROLS, PARAMETERS=FIELD\n0.1, 1.e-4")?;
         writeln!(w, "*CONTROLS, PARAMETERS=TIME INCREMENTATION\n8, 16, 9, 40, 10, 4, 0, 40")?;
     }
+    // pressure as CalculiX's P card follows the faces in a nonlinear step;
+    // SimLab's does not, so a nonlinear deck gets it as nodal forces
+    let dead_pressure = opts.nlgeom && !prep.parts.pressure.is_empty();
     let nodal: Vec<f64> = if opts.native_loads {
-        (0..3 * n).map(|d| prep.parts.surface[d] + prep.parts.inertia_nodal[d]).collect()
+        (0..3 * n).map(|d| prep.parts.surface[d] + prep.parts.inertia_nodal[d] + if dead_pressure { prep.parts.pressure_nodal[d] } else { 0.0 }).collect()
     } else {
         prep.f.clone()
     };
@@ -133,7 +159,7 @@ pub fn write_inp<W: Write>(w: &mut W, mesh: &TetMesh, prep: &Prepared, opts: &In
         }
     }
     if opts.native_loads {
-        if !prep.parts.pressure.is_empty() {
+        if !prep.parts.pressure.is_empty() && !dead_pressure {
             writeln!(w, "*DLOAD")?;
             for &(fi, p) in &prep.parts.pressure {
                 let f = &prep.faces[fi];
@@ -307,6 +333,38 @@ pub fn read_frd(text: &str) -> Result<Frd> {
 
 pub fn read_frd_file(path: &Path) -> Result<Frd> {
     read_frd(&std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?)
+}
+
+/// How far a CalculiX result is from balancing its loads: the largest
+/// |internal force − applied load| over the free nodes, relative to the
+/// largest applied nodal load. Uses CalculiX's own nodal forces (the `RF`
+/// output, which `.frd` gives at every node), so the rounding of the
+/// written displacements does not enter. `nonlinear`: the centrifugal load
+/// acts on the deformed shape (`u` = CalculiX's displacement). A correct
+/// solve gives ~1e-3 (CalculiX integrates CENTRIF with fewer points than
+/// SimLab); a broken one ≫ 1.
+pub fn equilibrium_error(frd: &Frd, mesh: &TetMesh, prep: &Prepared, u: &[f64], nonlinear: bool) -> Result<f64> {
+    let b = frd.last("FORC").context("no nodal forces (RF) in the results file")?;
+    let n = mesh.nodes.len();
+    let mut load = prep.f.clone();
+    if nonlinear {
+        for (l, d) in load.iter_mut().zip(crate::strength::spin_follow_load(mesh, prep, u)) {
+            *l += d;
+        }
+    }
+    let fmax = load.chunks(3).map(|c| norm([c[0], c[1], c[2]])).fold(0.0f64, f64::max).max(1e-300);
+    let mut worst: f64 = 0.0;
+    for i in 0..n {
+        if (0..3).any(|k| prep.bc.fixed[3 * i + k]) {
+            continue;
+        }
+        let Some(v) = b.values.get(&(i as u32 + 1)) else { continue };
+        if v.len() < 3 {
+            continue;
+        }
+        worst = worst.max(norm([v[0] - load[3 * i], v[1] - load[3 * i + 1], v[2] - load[3 * i + 2]]));
+    }
+    Ok(worst / fmax)
 }
 
 /// Node-by-node agreement between SimLab and a reference solution.

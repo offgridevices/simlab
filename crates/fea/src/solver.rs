@@ -52,11 +52,11 @@ impl Default for SolveOptions {
 
 /// Stress stiffening: a part under high tension gets stiffer against
 /// bending (a spinning propeller blade bends far less than a linear
-/// analysis predicts; the earlier CalculiX study used full geometric
-/// nonlinearity for this reason). When on, the solve is repeated with the
-/// geometric stiffness of the current stress (and spin softening for spin
-/// loads) until it settles. Free-flying parts are never stiffened (their
-/// minimal support must carry no load).
+/// analysis predicts). When on, the part is solved geometrically nonlinear
+/// (total Lagrangian, Newton's method, the spin load on the deformed shape),
+/// the problem CalculiX solves with `NLGEOM`, and stresses are reported as
+/// true (Cauchy) stresses of the deformed part. Free-flying parts are never
+/// stiffened (their minimal support must carry no load).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Stiffening {
@@ -90,9 +90,10 @@ pub struct SolverReport {
     pub memory_bytes: u64,
     /// estimated bytes the direct solver would have needed
     pub direct_memory_bytes: u64,
-    /// stress-stiffening passes after the linear solve (0 = none)
+    /// Newton passes of the nonlinear (stiffening) solve after the linear
+    /// solve and its first stiffened guess (0 = linear)
     pub stiffening_passes: usize,
-    /// relative displacement change of the last stiffening pass
+    /// relative displacement change of the last Newton pass
     pub stiffening_change: f64,
     /// why Auto switched from the iterative to the direct solver, if it did
     pub fallback: Option<String>,
@@ -222,7 +223,8 @@ pub fn solve(
     solve_with(mesh, &Stiffness::plain(el), bc, f, opts, progress, frac)
 }
 
-/// Like [`solve`], with stress stiffening / spin softening terms.
+/// Like [`solve`], with any element matrix: the nonlinear tangent, initial
+/// stress or spin softening (see [`Stiffness`]).
 pub fn solve_with(
     mesh: &TetMesh,
     el: &Stiffness,

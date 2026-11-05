@@ -9,8 +9,12 @@
 //!
 //! Gauss-point values (4 per element) and the element volume averages are
 //! kept for the robust peak measures.
+//!
+//! For a geometrically nonlinear solution the Gauss-point stress is the
+//! Cauchy (true) stress F S Fᵀ / det F, with S = D E from the Green-Lagrange
+//! strain: what CalculiX writes for an `NLGEOM` step.
 
-use crate::elem::{mat6_vec, strain, tet_rule_4, tet10_gradients};
+use crate::elem::{cauchy_stress, displacement_gradient, green_strain, mat6_vec, strain, tet_rule_4, tet10_gradients};
 use crate::material::Elastic;
 use crate::topo::tet_coords;
 use rayon::prelude::*;
@@ -48,7 +52,9 @@ pub fn element_u(u: &[f64], t: &[u32; 10]) -> [Vec3; 10] {
     })
 }
 
-pub fn recover(mesh: &TetMesh, el: &Elastic, u: &[f64]) -> Stresses {
+/// Stresses from a displacement field; `nonlinear`: Cauchy stress of the
+/// large-deformation solution (see the module docs).
+pub fn recover(mesh: &TetMesh, el: &Elastic, u: &[f64], nonlinear: bool) -> Stresses {
     let gp = tet_rule_4();
     type Per = ([[f64; 6]; 10], [[f64; 6]; 4], [f64; 4]);
     let per: Vec<Per> = (0..mesh.tets.len())
@@ -60,7 +66,12 @@ pub fn recover(mesh: &TetMesh, el: &Elastic, u: &[f64]) -> Stresses {
             let mut gw = [0.0; 4];
             for (k, q) in gp.iter().enumerate() {
                 let (g, det) = tet10_gradients(&x, &q.l);
-                gs[k] = mat6_vec(&el.d, &strain(&g, &ue));
+                gs[k] = if nonlinear {
+                    let h = displacement_gradient(&g, &ue);
+                    cauchy_stress(&h, &mat6_vec(&el.d, &green_strain(&h)))
+                } else {
+                    mat6_vec(&el.d, &strain(&g, &ue))
+                };
                 gw[k] = q.w * det;
             }
             // linear extrapolation: Gauss point k sits at l = b everywhere except

@@ -617,17 +617,17 @@ pub fn solve_strength(input: &StrengthInput, opts: &SolveOptions, progress: &dyn
     let prep = prepare(input)?;
     let t_prep = t0.elapsed().as_secs_f64();
     let t1 = Instant::now();
-    let (u, rep, pre) = solve_prepared(input, &prep, opts, progress, (0.05, 0.9))?;
+    let (u, rep, nonlinear) = solve_prepared(input, &prep, opts, progress, (0.05, 0.9))?;
     let t_solve = t1.elapsed().as_secs_f64();
     let t2 = Instant::now();
     progress.report(0.92, "Working out stresses");
-    let mut res = postprocess_with(input, prep, u, rep, pre)?;
+    let mut res = postprocess_with(input, prep, u, rep, nonlinear)?;
     res.timings = Timings { prepare_s: t_prep, solve_s: t_solve, recovery_s: t2.elapsed().as_secs_f64(), total_s: t0.elapsed().as_secs_f64() };
     progress.report(1.0, "Done");
     Ok(res)
 }
 
-/// Whether stress stiffening applies to this problem (see [`crate::solver::Stiffening`]).
+/// Whether stiffening applies to this problem (see [`crate::solver::Stiffening`]).
 pub fn stiffening_applies(prep: &Prepared, opts: &SolveOptions) -> bool {
     match opts.stiffening {
         crate::solver::Stiffening::Off => false,
@@ -636,25 +636,35 @@ pub fn stiffening_applies(prep: &Prepared, opts: &SolveOptions) -> bool {
     }
 }
 
-/// Solves a prepared problem: one linear solve, then (when stress
-/// stiffening applies) fixed-point passes with the geometric stiffness of
-/// the current stress and spin softening until the displacement changes by
-/// less than 0.2 %. Returns the displacement, the solver report and the
-/// displacement whose stress pre-loaded the last pass (for reactions).
+/// The nonlinear solve stops when the estimated remaining error of the
+/// displacement (from how fast the corrections shrink) is below this
+/// fraction of it.
+pub const NEWTON_TOL: f64 = 1e-8;
+const NEWTON_MAX: usize = 30;
+
+/// Solves a prepared problem: one linear solve, then (when stiffening
+/// applies) the geometrically nonlinear problem by Newton's method with a
+/// line search: total Lagrangian, St Venant-Kirchhoff, the centrifugal load
+/// acting on the deformed shape. This is the problem CalculiX solves with
+/// `NLGEOM`, so the two agree to the solver tolerance (the earlier
+/// linearised stiffening, with small-strain stress, was 2-3 % off it on a
+/// propeller at 1.5 % strain). Returns the displacement, the solver report
+/// and whether the solution is the nonlinear one.
 pub fn solve_prepared(
     input: &StrengthInput,
     prep: &Prepared,
     opts: &SolveOptions,
     progress: &dyn Progress,
     frac: (f32, f32),
-) -> Result<(Vec<f64>, SolverReport, Option<Vec<f64>>)> {
+) -> Result<(Vec<f64>, SolverReport, bool)> {
     let stiffen = stiffening_applies(prep, opts);
     let span = |a: f32| frac.0 + (frac.1 - frac.0) * a;
-    let first_end = if stiffen { span(0.3) } else { frac.1 };
+    let first_end = if stiffen { span(0.15) } else { frac.1 };
     let (mut u, mut rep) = solve(input.mesh, &prep.elastic, &prep.bc, &prep.f, opts, progress, (frac.0, first_end))?;
     if !stiffen {
-        return Ok((u, rep, None));
+        return Ok((u, rep, false));
     }
+    let mesh = input.mesh;
     let rho = prep.elastic.density;
     let spin: Vec<(f64, Vec3)> = prep.parts.spins.iter().map(|(w, _, ax)| (rho * w * w, *ax)).collect();
     // later passes reuse whichever solver won the first one
@@ -662,50 +672,115 @@ pub fn solve_prepared(
     if opts.solver == crate::solver::SolverChoice::Auto {
         opts.solver = if rep.method == "direct" { crate::solver::SolverChoice::Direct } else { crate::solver::SolverChoice::Iterative };
     }
-    let opts = &opts;
-    let mut pre = u.clone();
-    let mut change = 1.0;
+    // corrections are zero where the displacement is prescribed
+    let hold = Dirichlet { fixed: prep.bc.fixed.clone(), value: vec![0.0; prep.bc.fixed.len()] };
+    let all = vec![true; mesh.nodes.len()];
+    // out-of-balance force f_ext(u) − f_int(u) at the free dofs
+    let residual = |u: &[f64]| -> Vec<f64> {
+        let st = crate::elem::Stiffness { el: &prep.elastic, large_u: Some(u), prestress_u: None, spin: &spin };
+        let fint = internal_forces(mesh, &st, u, &all);
+        (0..u.len()).map(|k| if prep.bc.fixed[k] { 0.0 } else { prep.f[k] - fint[k] }).collect()
+    };
+    let dotv = |a: &[f64], b: &[f64]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f64>();
+    let norm2 = |a: &[f64]| dotv(a, a).sqrt();
+    let mut total = rep.solve_seconds + rep.factor_seconds + rep.assembly_seconds + rep.setup_seconds;
+    // first guess: the linear answer bends far too much (a spinning blade
+    // stiffens a lot), so solve once more with the stiffening of the linear
+    // answer's stress; Newton starts from there
+    progress.report(span(0.15), "Stiffening from the part's own stress, first guess");
+    let pre = crate::elem::Stiffness { el: &prep.elastic, large_u: None, prestress_u: Some(&u), spin: &spin };
+    let unstable = |e: anyhow::Error| {
+        if e.downcast_ref::<simlab_core::Cancelled>().is_some() {
+            e
+        } else {
+            e.context("the spinning part became unstable (it may be spinning faster than its own natural frequency)")
+        }
+    };
+    let (u1, rep1) = crate::solver::solve_with(mesh, &pre, &prep.bc, &prep.f, &opts, progress, (span(0.15), span(0.3))).map_err(unstable)?;
+    total += rep1.solve_seconds + rep1.factor_seconds + rep1.assembly_seconds + rep1.setup_seconds;
+    u = u1;
+    let mut r = residual(&u);
+    let (mut change, mut prev) = (1.0f64, 1.0f64);
     let mut passes = 0;
-    const MAX_PASSES: usize = 6;
-    while passes < MAX_PASSES && change > 2e-3 {
+    loop {
+        // remaining error ≈ next correction ≈ change · rate / (1 − rate)
+        let rate = (change / prev).min(0.99);
+        if passes >= 2 && change * rate / (1.0 - rate) < NEWTON_TOL {
+            break;
+        }
+        if passes == NEWTON_MAX {
+            bail!("the spinning part did not settle after {NEWTON_MAX} nonlinear passes (last change {change:.1e}); it may be spinning close to where it becomes unstable");
+        }
         passes += 1;
-        let st = crate::elem::Stiffness { el: &prep.elastic, prestress_u: Some(&pre), spin: &spin };
-        let a = span(0.3 + 0.7 * (passes - 1) as f32 / MAX_PASSES as f32);
-        let b = span(0.3 + 0.7 * passes as f32 / MAX_PASSES as f32);
+        let st = crate::elem::Stiffness { el: &prep.elastic, large_u: Some(&u), prestress_u: None, spin: &spin };
+        // progress: the corrections shrink about quadratically to the tolerance
+        let done = |c: f64| (c.max(NEWTON_TOL).log10() / NEWTON_TOL.log10()).clamp(0.0, 1.0) as f32;
+        let (a, b) = (span(0.3 + 0.7 * done(change)), span(0.3 + 0.7 * (done(change) + 0.15).min(1.0)));
         progress.report(a, &format!("Stiffening from the part's own stress, pass {passes}"));
-        let (u2, rep2) = crate::solver::solve_with(input.mesh, &st, &prep.bc, &prep.f, opts, progress, (a, b)).map_err(|e| {
-            if e.downcast_ref::<simlab_core::Cancelled>().is_some() {
-                e
-            } else {
-                e.context("the spinning part became unstable (it may be spinning faster than its own natural frequency)")
-            }
-        })?;
-        let num: f64 = u2.iter().zip(&u).map(|(a, b)| (a - b) * (a - b)).sum::<f64>().sqrt();
-        let den: f64 = u2.iter().map(|a| a * a).sum::<f64>().sqrt().max(1e-300);
-        change = num / den;
-        let total = rep.solve_seconds + rep.factor_seconds + rep.assembly_seconds + rep.setup_seconds;
+        let (du, rep2) = crate::solver::solve_with(mesh, &st, &hold, &r, &opts, progress, (a, b)).map_err(unstable)?;
+        total += rep2.solve_seconds + rep2.factor_seconds + rep2.assembly_seconds + rep2.setup_seconds;
         rep = rep2;
-        rep.solve_seconds += total;
-        pre = std::mem::replace(&mut u, u2);
-        // next pass uses the newest stress
-        pre.copy_from_slice(&u);
+        // line search on the energy: find α with du · r(u + α du) ≈ 0 (secant
+        // steps), so a pass far from the answer cannot overshoot
+        let g0 = dotv(&du, &r);
+        let trial = |alpha: f64| -> (Vec<f64>, Vec<f64>) {
+            let ut: Vec<f64> = u.iter().zip(&du).map(|(x, d)| x + alpha * d).collect();
+            let rt = residual(&ut);
+            (ut, rt)
+        };
+        let (mut alpha, (mut ut, mut rt)) = (1.0, trial(1.0));
+        if g0 > 0.0 {
+            let (mut a0, mut ga0) = (0.0, g0);
+            for _ in 0..5 {
+                let g = dotv(&du, &rt);
+                if g.abs() <= 0.5 * g0 {
+                    break;
+                }
+                let next = (alpha - g * (alpha - a0) / (g - ga0)).clamp(0.1, 2.0);
+                if !next.is_finite() || (next - alpha).abs() < 0.02 {
+                    break;
+                }
+                (a0, ga0) = (alpha, g);
+                alpha = next;
+                (ut, rt) = trial(alpha);
+            }
+        }
+        prev = change;
+        change = alpha.abs() * norm2(&du) / norm2(&ut).max(1e-300);
+        u = ut;
+        r = rt;
     }
+    rep.solve_seconds = total;
     rep.stiffening_passes = passes;
     rep.stiffening_change = change;
-    // reactions must use the operator of the last pass, i.e. the stress of the
-    // displacement before it; after convergence the two agree to `change`
-    Ok((u.clone(), rep, Some(u)))
+    Ok((u, rep, true))
+}
+
+/// The part of the spin load that follows the displacement, ∫ ρω² N P u dV
+/// (P removes the axis component): the centrifugal load on the deformed
+/// part is `prep.f` plus this. Zero without spins.
+pub fn spin_follow_load(mesh: &TetMesh, prep: &Prepared, u: &[f64]) -> Vec<f64> {
+    if prep.parts.spins.is_empty() {
+        return vec![0.0; u.len()];
+    }
+    let spin: Vec<(f64, Vec3)> = prep.parts.spins.iter().map(|(w, _, ax)| (prep.elastic.density * w * w, *ax)).collect();
+    let all = vec![true; mesh.nodes.len()];
+    let with = internal_forces(mesh, &crate::elem::Stiffness { el: &prep.elastic, large_u: None, prestress_u: None, spin: &spin }, u, &all);
+    let without = internal_forces(mesh, &crate::elem::Stiffness::plain(&prep.elastic), u, &all);
+    without.iter().zip(&with).map(|(a, b)| a - b).collect()
 }
 
 /// Turns a displacement solution into stresses, failure and summary values.
 pub fn postprocess(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: SolverReport) -> Result<StrengthResult> {
-    postprocess_with(input, prep, u, solver, None)
+    postprocess_with(input, prep, u, solver, false)
 }
 
-/// [`postprocess`] for a stress-stiffened solve: `prestress_u` is the
-/// displacement whose stress pre-loaded the operator (for the reactions).
-pub fn postprocess_with(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: SolverReport, prestress_u: Option<Vec<f64>>) -> Result<StrengthResult> {
-    postprocess_full(input, prep, u, solver, prestress_u, None)
+/// [`postprocess`] for a solution that is either linear or (`nonlinear`)
+/// the geometrically nonlinear one: then stresses are Cauchy (true)
+/// stresses of the deformed part and the reactions balance the centrifugal
+/// load on the deformed shape, as in CalculiX's `NLGEOM` output.
+pub fn postprocess_with(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: SolverReport, nonlinear: bool) -> Result<StrengthResult> {
+    postprocess_full(input, prep, u, solver, nonlinear, None)
 }
 
 /// [`postprocess_with`] for a solution from another solver (CalculiX):
@@ -713,22 +788,22 @@ pub fn postprocess_with(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solv
 /// recovery for the nodal values that drive the headline (peaks, failure
 /// index, safety factor, display fields). Element and Gauss-point measures
 /// (the sharp-corner check, the 99.9th percentile) still come from `u`.
-pub fn postprocess_reference(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: SolverReport, prestress_u: Option<Vec<f64>>, nodal_stress: Vec<[f64; 6]>) -> Result<StrengthResult> {
+pub fn postprocess_reference(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: SolverReport, nonlinear: bool, nodal_stress: Vec<[f64; 6]>) -> Result<StrengthResult> {
     if nodal_stress.len() != input.mesh.nodes.len() {
         bail!("the reference result has {} nodal stresses for {} nodes", nodal_stress.len(), input.mesh.nodes.len());
     }
-    postprocess_full(input, prep, u, solver, prestress_u, Some(nodal_stress))
+    postprocess_full(input, prep, u, solver, nonlinear, Some(nodal_stress))
 }
 
-fn postprocess_full(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: SolverReport, prestress_u: Option<Vec<f64>>, nodal_stress: Option<Vec<[f64; 6]>>) -> Result<StrengthResult> {
+fn postprocess_full(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: SolverReport, nonlinear: bool, nodal_stress: Option<Vec<[f64; 6]>>) -> Result<StrengthResult> {
     let mesh = input.mesh;
     let el = &prep.elastic;
     let n = mesh.nodes.len();
     let mut warnings = prep.warnings.clone();
     // reactions at prescribed dofs
     let touching: Vec<bool> = (0..n).map(|i| (0..3).any(|k| prep.bc.fixed[3 * i + k])).collect();
-    let spin: Vec<(f64, Vec3)> = if prestress_u.is_some() { prep.parts.spins.iter().map(|(w, _, ax)| (el.density * w * w, *ax)).collect() } else { vec![] };
-    let st = crate::elem::Stiffness { el, prestress_u: prestress_u.as_deref(), spin: &spin };
+    let spin: Vec<(f64, Vec3)> = if nonlinear { prep.parts.spins.iter().map(|(w, _, ax)| (el.density * w * w, *ax)).collect() } else { vec![] };
+    let st = crate::elem::Stiffness { el, large_u: nonlinear.then_some(&u[..]), prestress_u: None, spin: &spin };
     let fint = internal_forces(mesh, &st, &u, &touching);
     let mut rf = [0.0; 3];
     let mut rm = [0.0; 3];
@@ -755,7 +830,7 @@ fn postprocess_full(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: 
         // remove the rigid-body part of the motion (mass-weighted)
         remove_rigid_motion(mesh, el.density, &prep.mass, ir.center_m, &mut disp);
     }
-    let mut st: Stresses = recover(mesh, el, &u);
+    let mut st: Stresses = recover(mesh, el, &u, nonlinear);
     if let Some(ns) = nodal_stress {
         // nodes no element uses carry no stress in either solver
         st.nodal = ns.into_iter().map(|s| if s[0].is_nan() { [0.0; 6] } else { s }).collect();
@@ -833,7 +908,7 @@ fn postprocess_full(input: &StrengthInput, prep: Prepared, u: Vec<f64>, solver: 
     // size of the part
     let (lo, hi) = bounds(mesh);
     let size = norm(sub(hi, lo));
-    if dmax > 0.05 * size {
+    if dmax > 0.05 * size && !nonlinear {
         warnings.push(format!("The part bends a lot ({:.0} % of its size); a straight-line (linear) analysis is only rough at this load.", 100.0 * dmax / size));
     }
     if !input.material.estimated_fields.is_empty() {

@@ -64,7 +64,7 @@ fn patch_test_displacement() {
             }
         }
         assert!(err < 1e-9 * 1e-5, "{choice:?}: displacement error {err:e}");
-        let st = simlab_fea::recovery::recover(&mesh, &el, &u);
+        let st = simlab_fea::recovery::recover(&mesh, &el, &u, false);
         let eps = [a[0][0], a[1][1], a[2][2], a[0][1] + a[1][0], a[1][2] + a[2][1], a[2][0] + a[0][2]];
         let sig: Vec<f64> = (0..6).map(|i| (0..6).map(|j| el.d[i][j] * eps[j]).sum()).collect();
         let smax = sig.iter().fold(0.0f64, |m, v| m.max(v.abs()));

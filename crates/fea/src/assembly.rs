@@ -321,28 +321,13 @@ pub fn assemble(
     Ok(val)
 }
 
-/// Internal nodal forces Σ Kₑuₑ of the elements touching `nodes_of_interest`
-/// (used for support reactions). Returns a full-length vector.
+/// Internal nodal forces of the elements touching `nodes_of_interest` (Σ Kₑuₑ
+/// for a linear solve; see [`Stiffness::element_force`] for a nonlinear
+/// one). Used for support reactions and Newton residuals. Returns a
+/// full-length vector.
 pub fn internal_forces(mesh: &TetMesh, st: &Stiffness, u: &[f64], touching: &[bool]) -> Vec<f64> {
     let elems: Vec<usize> = (0..mesh.tets.len()).filter(|&e| mesh.tets[e].iter().any(|&v| touching[v as usize])).collect();
-    let parts: Vec<(usize, [f64; 30])> = elems
-        .par_iter()
-        .map(|&e| {
-            let mut ke = [0.0f64; 900];
-            st.element(mesh, e, &mut ke);
-            let t = &mesh.tets[e];
-            let ue: [f64; 30] = std::array::from_fn(|i| u[3 * t[i / 3] as usize + i % 3]);
-            let mut fe = [0.0; 30];
-            for i in 0..30 {
-                let mut s = 0.0;
-                for j in 0..30 {
-                    s += ke[i * 30 + j] * ue[j];
-                }
-                fe[i] = s;
-            }
-            (e, fe)
-        })
-        .collect();
+    let parts: Vec<(usize, [f64; 30])> = elems.par_iter().map(|&e| (e, st.element_force(mesh, e, u))).collect();
     let mut f = vec![0.0; u.len()];
     for (e, fe) in parts {
         let t = &mesh.tets[e];

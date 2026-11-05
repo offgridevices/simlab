@@ -58,6 +58,11 @@ pub fn mesh_step(py: &std::path::Path, script: &std::path::Path, step: &std::pat
         .arg(size.to_string())
         .arg("--unit")
         .arg(unit.to_string())
+        // one thread: Gmsh's parallel mesher gives a slightly different mesh
+        // each run (the plate's peak moved 2.7-3.0 % from Peterson), so a
+        // test could pass or fail by chance
+        .arg("--threads")
+        .arg("1")
         .output()
         .expect("mesher");
     assert!(o.status.success(), "mesher failed: {}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
@@ -65,11 +70,13 @@ pub fn mesh_step(py: &std::path::Path, script: &std::path::Path, step: &std::pat
 }
 
 /// Runs CalculiX on `<dir>/<job>.inp`: `ccx` on PATH if present, else the
-/// `simlab-reference:1` Docker image (Colima socket). Returns false when
+/// `simlab-reference:1` Docker image (Colima socket), with the engine's
+/// thread settings ([`simlab_fea::calculix::ccx_env`]). Returns false when
 /// neither is available.
 pub fn run_ccx(dir: &std::path::Path, job: &str) -> bool {
+    let env = simlab_fea::calculix::ccx_env(std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8));
     let ccx = std::env::var("CCX").unwrap_or_else(|_| "ccx".into());
-    if let Ok(o) = std::process::Command::new(&ccx).arg("-i").arg(job).current_dir(dir).output() {
+    if let Ok(o) = std::process::Command::new(&ccx).arg("-i").arg(job).envs(env.iter().cloned()).current_dir(dir).output() {
         assert!(o.status.success(), "ccx failed: {}", String::from_utf8_lossy(&o.stdout));
         return true;
     }
@@ -82,10 +89,9 @@ pub fn run_ccx(dir: &std::path::Path, job: &str) -> bool {
     use std::io::Write;
     let mut child = std::process::Command::new("docker")
         .env("DOCKER_HOST", &host)
+        .args(["run", "--rm", "-i"])
+        .args(env.iter().flat_map(|(k, v)| ["-e".to_string(), format!("{k}={v}")]))
         .args([
-            "run",
-            "--rm",
-            "-i",
             "simlab-reference:1",
             "sh",
             "-c",
