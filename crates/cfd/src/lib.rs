@@ -20,8 +20,11 @@
 
 #![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 
+pub mod d3q27;
 pub mod gpu;
 pub mod lattice;
+pub mod mlattice;
+pub mod mshader;
 pub mod shader;
 pub mod shapes;
 pub mod tunnel;

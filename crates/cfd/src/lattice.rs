@@ -199,12 +199,12 @@ fn feq_shifted(u: [f64; 3]) -> [f32; 19] {
     f
 }
 
-fn record_words(cell: u32, mask: u32, q: &[f32; 18], u: [f64; 3]) -> [u32; RS as usize] {
+fn record_words(cell: u32, mask: u32, q: &[f32], u: [f64; 3]) -> [u32; RS as usize] {
     let mut w = [0u32; RS as usize];
     w[0] = mask;
     w[1] = cell;
     for k in 0..9 {
-        w[2 + k] = f16_bits(q[2 * k]) as u32 | ((f16_bits(q[2 * k + 1]) as u32) << 16);
+        w[2 + k] = f16_bits(q[2 * k + 1]) as u32 | ((f16_bits(q[2 * k + 2]) as u32) << 16);
     }
     let fe = feq_shifted(u);
     for i in 1..19 {
@@ -463,7 +463,7 @@ impl Lattice {
                 q.write_buffer(&recs, 0, bytemuck::cast_slice(&words));
             }
             Geometry::Spin { .. } => {
-                let ones = [1.0f32; 18];
+                let ones = [1.0f32; 27];
                 let mut words: Vec<u32> = Vec::with_capacity(nrec as usize * RS as usize);
                 let mut k = 0u32;
                 for z in 0..box_n[2] {

@@ -330,8 +330,8 @@ pub fn seg_tri(o: P3, d: P3, t: [P3; 3]) -> Option<f64> {
 pub struct WallCell {
     pub cell: u32,
     pub mask: u32,
-    /// q for directions 1..=18 (index i-1); 1.0 where there is no wall
-    pub q: [f32; 18],
+    /// q by direction index; 1.0 where there is no wall
+    pub q: [f32; 27],
 }
 
 pub struct StaticVoxels {
@@ -346,27 +346,55 @@ pub struct StaticVoxels {
 /// Voxelizes a static surface given in lattice coordinates (cell centres
 /// at integer points) into a grid of `dims` cells.
 pub fn voxelize_static(s: &Surface, dims: [usize; 3]) -> StaticVoxels {
+    let dirs: Vec<[i32; 3]> = C.to_vec();
+    let opp: Vec<usize> = (0..19).map(crate::shader::opp).collect();
+    voxelize_links(s, dims, &dirs, &opp, 0)
+}
+
+/// D3Q27 links (direction `i` as in `d3q27`).
+pub fn voxelize_static27(s: &Surface, dims: [usize; 3]) -> StaticVoxels {
+    let dirs: Vec<[i32; 3]> = (0..27).map(crate::d3q27::c).collect();
+    let opp: Vec<usize> = (0..27).map(crate::d3q27::opp).collect();
+    voxelize_links(s, dims, &dirs, &opp, crate::d3q27::REST)
+}
+
+/// Solid cells and wall links for any lattice velocity set (`rest` is the
+/// index of the zero velocity, which is skipped).
+pub fn voxelize_links(s: &Surface, dims: [usize; 3], dirs: &[[i32; 3]], opp: &[usize], rest: usize) -> StaticVoxels {
+    let nd = dirs.len();
+    let maxlen = dirs.iter().map(|d| ((d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) as f64).sqrt()).fold(0.0, f64::max);
     let (blo, bhi) = s.bounds();
-    let mut lo = [0usize; 3];
-    let mut hi = [0usize; 3];
+    // the examined box reaches one cell beyond the domain, so a neighbour
+    // across a periodic wrap (or at the domain edge) is classified too
+    let mut slo = [0i64; 3];
+    let mut shi = [0i64; 3];
     for k in 0..3 {
-        lo[k] = ((blo[k] - 2.0).floor().max(0.0)) as usize;
-        hi[k] = (((bhi[k] + 2.0).ceil()) as usize).min(dims[k] - 1);
+        slo[k] = ((blo[k] - 2.0).floor() as i64).max(-1);
+        shi[k] = ((bhi[k] + 2.0).ceil() as i64).min(dims[k] as i64);
     }
-    if s.tris.is_empty() || (0..3).any(|k| lo[k] > hi[k]) {
+    let lo = [slo[0].max(0) as usize, slo[1].max(0) as usize, slo[2].max(0) as usize];
+    let hi = [shi[0].min(dims[0] as i64 - 1).max(0) as usize, shi[1].min(dims[1] as i64 - 1).max(0) as usize, shi[2].min(dims[2] as i64 - 1).max(0) as usize];
+    if s.tris.is_empty() || (0..3).any(|k| slo[k] > shi[k]) {
         return StaticVoxels { solid: vec![], walls: vec![], lo, hi };
     }
-    let gd = [hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1];
-    let g = Grid { origin: [lo[0] as f64, lo[1] as f64, lo[2] as f64], h: 1.0, dims: gd };
+    let gd = [(shi[0] - slo[0] + 1) as usize, (shi[1] - slo[1] + 1) as usize, (shi[2] - slo[2] + 1) as usize];
+    let g = Grid { origin: [slo[0] as f64, slo[1] as f64, slo[2] as f64], h: 1.0, dims: gd };
     let inside = inside_grid(s, &g);
-    let bins = Bins::build(s, [lo[0] as f64 - 0.5, lo[1] as f64 - 0.5, lo[2] as f64 - 0.5], gd, std::f64::consts::SQRT_2 + 0.01);
-    let gidx = |i: usize, j: usize, k: usize| -> usize { ((k + lo[2]) * dims[1] + (j + lo[1])) * dims[0] + (i + lo[0]) };
-    let solid: Vec<u32> = (0..g.len()).filter(|&l| inside[l]).map(|l| {
-        let i = l % gd[0];
-        let j = (l / gd[0]) % gd[1];
-        let k = l / (gd[0] * gd[1]);
-        gidx(i, j, k) as u32
-    }).collect();
+    let bins = Bins::build(s, [slo[0] as f64 - 0.5, slo[1] as f64 - 0.5, slo[2] as f64 - 0.5], gd, maxlen + 0.01);
+    let in_domain = |i: usize, j: usize, k: usize| -> bool {
+        let p = [i as i64 + slo[0], j as i64 + slo[1], k as i64 + slo[2]];
+        (0..3).all(|a| p[a] >= 0 && p[a] < dims[a] as i64)
+    };
+    let gidx = |i: usize, j: usize, k: usize| -> usize { ((k as i64 + slo[2]) as usize * dims[1] + (j as i64 + slo[1]) as usize) * dims[0] + (i as i64 + slo[0]) as usize };
+    let solid: Vec<u32> = (0..g.len())
+        .filter(|&l| inside[l])
+        .filter_map(|l| {
+            let i = l % gd[0];
+            let j = (l / gd[0]) % gd[1];
+            let k = l / (gd[0] * gd[1]);
+            if in_domain(i, j, k) { Some(gidx(i, j, k) as u32) } else { None }
+        })
+        .collect();
     let is_solid = |i: i64, j: i64, k: i64| -> bool {
         if i < 0 || j < 0 || k < 0 || i >= gd[0] as i64 || j >= gd[1] as i64 || k >= gd[2] as i64 {
             return false;
@@ -379,20 +407,26 @@ pub fn voxelize_static(s: &Surface, dims: [usize; 3]) -> StaticVoxels {
     // hit only sets q. A link between two fluid cells that crosses the
     // surface twice (a sheet thinner than a cell) is a wall from both sides.
     let rel = |l: usize| -> (usize, usize, usize) { (l % gd[0], (l / gd[0]) % gd[1], l / (gd[0] * gd[1])) };
-    let per_cell: Vec<(usize, u32, [f32; 18], Vec<(usize, usize, f32)>)> = (0..g.len())
+    let per_cell: Vec<(usize, u32, [f32; 27], Vec<(usize, usize, f32)>)> = (0..g.len())
         .into_par_iter()
         .filter_map(|l| {
             if inside[l] {
                 return None;
             }
             let (i, j, k) = rel(l);
-            let p = [(i + lo[0]) as f64, (j + lo[1]) as f64, (k + lo[2]) as f64];
+            if !in_domain(i, j, k) {
+                return None;
+            }
+            let p = [(i as i64 + slo[0]) as f64, (j as i64 + slo[1]) as f64, (k as i64 + slo[2]) as f64];
             let cand = bins.get(p);
-            let mut q = [1.0f32; 18];
+            let mut q = [1.0f32; 27];
             let mut mask = 0u32;
             let mut thin = Vec::new();
-            for d in 1..19 {
-                let c = C[d];
+            for d in 0..nd {
+                if d == rest {
+                    continue;
+                }
+                let c = dirs[d];
                 let (ni, nj, nk) = (i as i64 + c[0] as i64, j as i64 + c[1] as i64, k as i64 + c[2] as i64);
                 let dv = [c[0] as f64, c[1] as f64, c[2] as f64];
                 let (mut tmin, mut tmax, mut hits) = (f64::INFINITY, f64::NEG_INFINITY, 0);
@@ -408,14 +442,14 @@ pub fn voxelize_static(s: &Surface, dims: [usize; 3]) -> StaticVoxels {
                 // reaches the domain edge) the crossing count decides
                 let nsolid = if in_region { is_solid(ni, nj, nk) } else { hits % 2 == 1 };
                 if nsolid {
-                    q[d - 1] = if hits > 0 { tmin.clamp(1e-3, 1.0) as f32 } else { 0.5 };
+                    q[d] = if hits > 0 { tmin.clamp(1e-3, 1.0) as f32 } else { 0.5 };
                     mask |= 1 << d;
                 } else if hits >= 2 && tmax - tmin > 1e-6 {
-                    q[d - 1] = tmin.clamp(1e-3, 1.0) as f32;
+                    q[d] = tmin.clamp(1e-3, 1.0) as f32;
                     mask |= 1 << d;
                     let inside_region = ni >= 0 && nj >= 0 && nk >= 0 && (ni as usize) < gd[0] && (nj as usize) < gd[1] && (nk as usize) < gd[2];
                     if inside_region {
-                        thin.push((g.idx(ni as usize, nj as usize, nk as usize), crate::shader::opp(d), (1.0 - tmax).clamp(1e-3, 1.0) as f32));
+                        thin.push((g.idx(ni as usize, nj as usize, nk as usize), opp[d], (1.0 - tmax).clamp(1e-3, 1.0) as f32));
                     }
                 }
             }
@@ -427,19 +461,20 @@ pub fn voxelize_static(s: &Surface, dims: [usize; 3]) -> StaticVoxels {
         .collect();
     // make thin-sheet links reciprocal
     let mut at: std::collections::HashMap<usize, usize> = per_cell.iter().enumerate().map(|(r, c)| (c.0, r)).collect();
-    let mut cells: Vec<(usize, u32, [f32; 18])> = per_cell.iter().map(|c| (c.0, c.1, c.2)).collect();
+    let mut cells: Vec<(usize, u32, [f32; 27])> = per_cell.iter().map(|c| (c.0, c.1, c.2)).collect();
     for c in &per_cell {
         for &(nl, d, qv) in &c.3 {
-            if inside[nl] {
+            let (i, j, k) = rel(nl);
+            if inside[nl] || !in_domain(i, j, k) {
                 continue;
             }
             let r = *at.entry(nl).or_insert_with(|| {
-                cells.push((nl, 0, [1.0; 18]));
+                cells.push((nl, 0, [1.0; 27]));
                 cells.len() - 1
             });
             if cells[r].1 & (1 << d) == 0 {
                 cells[r].1 |= 1 << d;
-                cells[r].2[d - 1] = qv;
+                cells[r].2[d] = qv;
             }
         }
     }

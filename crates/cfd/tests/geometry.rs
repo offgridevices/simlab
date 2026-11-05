@@ -22,7 +22,7 @@ fn sphere_volume_and_links() {
     for w in &v.walls {
         for d in 1..19 {
             if w.mask & (1 << d) != 0 {
-                assert!(w.q[d - 1] > 0.0 && w.q[d - 1] <= 1.0);
+                assert!(w.q[d] > 0.0 && w.q[d] <= 1.0);
             }
         }
     }
@@ -138,7 +138,7 @@ fn gpu_revoxelizer_matches_cpu() {
                 same += common.count_ones() as usize;
                 for d in 1..19 {
                     if common & (1 << d) != 0 {
-                        let e = (q[d - 1] - w.q[d - 1]).abs() as f64;
+                        let e = (q[d - 1] - w.q[d]).abs() as f64;
                         if e > 0.05 {
                             qbad += 1;
                         }
