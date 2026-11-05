@@ -147,11 +147,15 @@ function Loaded({
   );
   const scene: SceneState = useMemo(() => Object.assign({}, DEFAULT_SCENE, ...requests.values()), [requests]);
 
-  // which surface: a model of this project, or a run's result surface
+  // which surface: a model of this project, or a run's result surface. A
+  // run's part is the model its test was set up on, never the one picked in
+  // the Model panel: its size and faces label the result.
+  const src = scene.source;
+  const runModelId = src.kind === "run" ? data.studies.find((s) => s.runs.some((r) => r.id === src.runId))?.model_id : undefined;
   const model: Model | undefined =
-    (scene.source.kind === "model" && scene.source.modelId ? data.models.find((m) => scene.source.kind === "model" && m.id === scene.source.modelId) : undefined) ??
-    data.models.find((m) => m.id === nav.model) ??
-    data.models[0];
+    (src.kind === "model" && src.modelId ? data.models.find((m) => m.id === src.modelId) : undefined) ??
+    (src.kind === "run" ? data.models.find((m) => m.id === runModelId) : undefined) ??
+    (src.kind === "run" && runModelId ? undefined : data.models.find((m) => m.id === nav.model) ?? data.models[0]);
   // the part a panel works on: the one picked in the Model panel, or the first
   const current = data.models.find((m) => m.id === nav.model) ?? data.models[0];
   const runId = scene.source.kind === "run" ? scene.source.runId : null;
