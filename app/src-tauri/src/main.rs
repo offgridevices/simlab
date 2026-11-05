@@ -29,7 +29,7 @@ fn start_engine() -> Result<Option<Child>, String> {
     let _ = std::fs::create_dir_all(&log_dir);
     let log = std::fs::File::create(format!("{log_dir}/engine.log")).map_err(|e| e.to_string())?;
     let child = Command::new(&engine)
-        .args(["serve", "--port", &PORT.to_string()])
+        .args(["serve", "--port", &PORT.to_string(), "--exit-with-parent"])
         .stdin(Stdio::null())
         .stdout(log.try_clone().map_err(|e| e.to_string())?)
         .stderr(log)

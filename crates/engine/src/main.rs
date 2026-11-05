@@ -70,6 +70,18 @@ fn serve(args: &[String], port: u16) -> anyhow::Result<()> {
         }
         tokio::spawn(jobs::worker(app.clone(), grx));
         tokio::spawn(jobs::worker(app.clone(), crx));
+        // started by SimLab.app: leave when the app goes, even if it crashed
+        // or was force-quit (the window then never says goodbye)
+        if args.iter().any(|a| a == "--exit-with-parent") {
+            let parent = std::os::unix::process::parent_id();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                if std::os::unix::process::parent_id() != parent {
+                    eprintln!("SimLab.app is gone, exiting");
+                    std::process::exit(0);
+                }
+            });
+        }
         if let Some(secs) = idle_exit {
             let app = app.clone();
             tokio::spawn(async move {
