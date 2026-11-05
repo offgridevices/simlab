@@ -1,6 +1,8 @@
 // Wind tunnel results: the forces in plain numbers, the part coloured by
 // air pressure, flow slices you can switch on, and how the force settled.
 import { useMemo, useState } from "react";
+import { GaugeIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Card } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
@@ -8,15 +10,16 @@ import { Label } from "@/components/ui/label";
 import { useApp } from "../lib/app";
 import { useAsync, useField } from "../lib/hooks";
 import { colorize, scaleFor, type ColorScale } from "../lib/colormaps";
-import { duration, G, n } from "../lib/format";
+import { duration, engineLabel, G, n } from "../lib/format";
 import type { Run, Slice, WindSummary } from "../lib/types";
 import { Details, Row, Stat } from "../components/section";
 import { HowSure, Segmented } from "./common";
 import { useScene } from "./scene-state";
 import { Legend } from "./legend";
 import { MetricChart, pickMetric } from "./running";
+import type { Again } from "./start-run";
 
-export function WindResults({ run, summary: s }: { run: Run; summary: WindSummary }) {
+export function WindResults({ run, summary: s, again }: { run: Run; summary: WindSummary; again?: Again }) {
   const { api } = useApp();
   const surfaceField = run.fields.find((f) => f.name === "pressure") ?? run.fields[0] ?? null;
   const [colour, setColour] = useState<"pressure" | "plain">(surfaceField ? "pressure" : "plain");
@@ -59,13 +62,36 @@ export function WindResults({ run, summary: s }: { run: Run; summary: WindSummar
   });
   const metric = pickMetric(run.metrics);
   const spin = s.thrust_n !== null && s.thrust_n !== undefined;
+  const preview = (s.engine ?? run.engine) === "native";
+  // a part spinning in still air: "drag" and "lift" along the wake mean nothing
+  const hover = spin && run.config.kind === "wind" && run.config.speed_m_s === 0;
+  const iterations = s.iterations ?? (preview ? null : s.steps);
 
   return (
     <div className="flex flex-col gap-4" data-testid="wind-results">
+      {preview && (
+        <Alert tone="gold" data-testid="preview-note">
+          <span className="flex flex-col gap-2">
+            <span>
+              <span className="font-semibold">Quick preview, not the answer. </span>
+              {s.preview_note ?? (spin ? "Rough picture only: thrust can be 30–60% off, use Accurate for numbers." : "Drag within about 3% on simple shapes at low Reynolds number, less certain above.")}
+            </span>
+            {again && (
+              <Button size="sm" variant="outline" className="self-start" onClick={() => again.rerun("reference")} disabled={again.starting} data-testid="run-accurate">
+                <GaugeIcon />
+                {again.starting ? "Starting…" : "Run it accurately (OpenFOAM)"}
+              </Button>
+            )}
+            {again?.setting && <span className="text-xs">{again.setting}</span>}
+            {again?.startError && <span className="text-xs text-destructive">{again.startError}</span>}
+          </span>
+        </Alert>
+      )}
+      {again?.dialog}
       <Card className="gap-1 border-sky/40 bg-sky/10 p-4">
         <div className="flex items-baseline justify-between gap-3">
-          <span className="text-xl font-semibold tracking-tight text-sky-text">{spin ? "Thrust and drag" : "Drag"}</span>
-          <span className="num text-xl font-semibold text-sky-text">{n(spin ? s.thrust_n! : s.drag_n, 3)} N</span>
+          <span className="text-xl font-semibold tracking-tight text-sky-text">{spin ? (preview ? "Thrust (rough)" : "Thrust") : preview ? "Drag (preview)" : "Drag"}</span>
+          <span className="num text-xl font-semibold text-sky-text">{spin ? `${n(s.thrust_g ?? (s.thrust_n! / G) * 1000)} g` : `${n(s.drag_n, 3)} N`}</span>
         </div>
         <span className="text-soft">{s.headline}</span>
       </Card>
@@ -73,12 +99,16 @@ export function WindResults({ run, summary: s }: { run: Run; summary: WindSummar
         {spin && (
           <>
             <Stat label="Thrust (push)" value={n(s.thrust_n!)} unit="N" hint={`${n((s.thrust_n! / G) * 1000)} g`} />
-            <Stat label="Power" value={n(s.power_w ?? 0)} unit="W" />
-            <Stat label="Twist (torque)" value={n(s.torque_nm ?? 0, 3)} unit="N·m" />
+            <Stat label="Power" value={n(s.power_w ?? 0)} unit="W" hint="at the shaft" />
+            <Stat label="Twist (torque)" value={n((s.torque_nm ?? 0) * 1000, 3)} unit="mN·m" />
           </>
         )}
-        <Stat label="Drag" value={n(s.drag_n)} unit="N" hint={`${n((s.drag_n / G) * 1000)} g`} />
-        <Stat label="Lift" value={n(s.lift_n)} unit="N" />
+        {!hover && (
+          <>
+            <Stat label="Drag" value={n(s.drag_n)} unit="N" hint={`${n((s.drag_n / G) * 1000)} g`} />
+            <Stat label="Lift" value={n(s.lift_n)} unit="N" />
+          </>
+        )}
         {!spin && <Stat label="Side force" value={n(s.side_n)} unit="N" />}
         {s.cd !== null && s.cd !== undefined && <Stat label="Drag coefficient" value={n(s.cd, 3)} hint="Cd, by the frontal area" />}
       </div>
@@ -129,10 +159,13 @@ export function WindResults({ run, summary: s }: { run: Run; summary: WindSummar
         </Card>
       )}
 
-      <HowSure accuracy={s.accuracy} facts={[`${n(s.cells)} air cells`, `${n(s.steps)} steps`, s.converged ? "settled" : "not fully settled", `took ${duration(s.seconds)}`]} />
+      <HowSure
+        accuracy={s.accuracy}
+        facts={[engineLabel("wind", s.engine ?? run.engine), `${n(s.cells)} cells`, iterations ? `${n(iterations)} iterations` : `${n(s.steps)} steps`, s.converged ? "settled" : "not fully settled", `took ${duration(s.seconds)}`]}
+      />
       {metric && <MetricChart run={run} name={metric} />}
 
-      {s.warnings.map((w) => (
+      {s.warnings.filter((w) => w !== s.preview_note).map((w) => (
         <Alert key={w} tone="gold">
           {w}
         </Alert>
@@ -142,12 +175,15 @@ export function WindResults({ run, summary: s }: { run: Run; summary: WindSummar
         <Row label="Moment x, y, z">{s.moment_nm.map((v) => n(v, 3)).join(", ")} N·m</Row>
         <Row label="Frontal area">{n(s.ref_area_mm2)} mm²</Row>
         <Row label="Reynolds number">{n(s.reynolds)}</Row>
+        {s.rpm ? <Row label="Spin speed">{n(Math.abs(s.rpm))} rpm</Row> : null}
         <Row label="Air cells">{n(s.cells)}</Row>
-        <Row label="Time steps">{n(s.steps)}</Row>
-        <Row label="Speed">{n(s.mlups)} million cell updates/s</Row>
+        {iterations ? <Row label="Solver iterations">{n(iterations)}</Row> : <Row label="Time steps">{n(s.steps)}</Row>}
+        {s.mlups ? <Row label="Speed">{n(s.mlups)} million cell updates/s</Row> : null}
+        {s.turbulence ? <Row label="Turbulence model">{s.turbulence}</Row> : null}
+        {s.y_plus ? <Row label="y+ on the part (min, average, max)">{s.y_plus.map((v) => n(v, 2)).join(", ")}</Row> : null}
         <Row label="Took">{duration(s.seconds)}</Row>
         <Row label="Settled">{s.converged ? "Yes" : "Not fully: treat the numbers as rough"}</Row>
-        <Row label="Solved by">{run.engine === "native" ? "SimLab (GPU)" : run.engine}</Row>
+        <Row label="Solved by">{engineLabel("wind", s.engine ?? run.engine)}</Row>
       </Details>
     </div>
   );

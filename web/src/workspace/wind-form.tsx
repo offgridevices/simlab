@@ -2,12 +2,12 @@
 // spins (a propeller), and how detailed.
 import { Label } from "@/components/ui/label";
 import { useMemo, useState } from "react";
-import { ArrowDownIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, MoveDownLeftIcon, MoveUpRightIcon } from "lucide-react";
+import { ArrowDownIcon, ArrowLeftIcon, ArrowRightIcon, ArrowUpIcon, GaugeIcon, MoveDownLeftIcon, MoveUpRightIcon, ZapIcon } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { dirLabel, n } from "../lib/format";
-import type { GridQuality, Vec3, WindConfig } from "../lib/types";
+import { dirLabel, duration, n } from "../lib/format";
+import type { Engine, Estimate, GridQuality, Vec3, WindConfig } from "../lib/types";
 import { AxisPicker, NumberField, Segmented, Step, unit } from "./common";
 import { useScene } from "./scene-state";
 import { Accordion } from "@/components/ui/accordion";
@@ -34,7 +34,30 @@ const FROM: { label: string; dir: Vec3; icon: React.ReactNode }[] = [
 ];
 const same = (a: Vec3, b: Vec3) => Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]) < 1e-6;
 
-export function WindSteps({ config: c, set, model, step, setStep, estimate }: StepsProps<WindConfig>) {
+/** the two ways to run an air test, in the words the app uses */
+export const WIND_ENGINES: { id: Engine; label: string; icon: React.ReactNode; detail: string }[] = [
+  {
+    id: "reference",
+    label: "Accurate",
+    icon: <GaugeIcon />,
+    detail: "OpenFOAM in Docker, on the processor. The numbers to trust: propeller thrust within about 3%, drag on simple shapes within about 1%.",
+  },
+  {
+    id: "native",
+    label: "Quick preview",
+    icon: <ZapIcon />,
+    detail: "On the graphics chip, for a first look at the flow. Drag within about 3% on simple shapes; a spinning part's thrust can be 30–60% off, far more at Draft.",
+  },
+];
+
+function timeFor(est: Estimate | null, e: Engine): string {
+  const x = est?.engines?.[e];
+  if (!x) return est ? "" : "…";
+  if (x.available === false) return "can't run";
+  return `about ${duration(x.seconds)}`;
+}
+
+export function WindSteps({ config: c, set, model, step, setStep, estimate, engine, setEngine, estimates }: StepsProps<WindConfig>) {
   const [kmh, setKmh] = useState(false);
   const prop = model.suggestions?.prop;
   const R = model.size_mm ? Math.max(...model.size_mm) / 2 : 50;
@@ -146,7 +169,33 @@ export function WindSteps({ config: c, set, model, step, setStep, estimate }: St
             { id: "fine", label: "Fine" },
           ]}
         />
-        <p className="text-xs text-muted-foreground">More detail means smaller air cells: sharper flow pictures and forces, but slower, and more memory on the graphics chip.</p>
+        <p className="text-xs text-muted-foreground">More detail means smaller air cells: sharper flow pictures and forces, but slower and more memory.</p>
+      </Step>
+
+      <Step n={5} title="How sure do you need to be?" summary={engine === "native" ? "Quick preview (GPU)" : "Accurate (OpenFOAM)"} done testId="step-wind-engine">
+        <ToggleGroup
+          type="single"
+          aria-label="Accurate or quick preview"
+          className="grid h-auto w-full grid-cols-1 gap-1 min-[420px]:grid-cols-2"
+          value={engine}
+          onValueChange={(v) => v && setEngine(v as Engine)}
+          data-testid="wind-engine"
+        >
+          {WIND_ENGINES.map((e) => (
+            <ToggleGroupItem key={e.id} value={e.id} className="h-auto min-h-11 flex-col items-start gap-0.5 px-3 py-2 text-left" data-testid={`engine-${e.id}`}>
+              <span className="flex items-center gap-1.5 text-sm font-medium [&_svg]:size-4">
+                {e.icon}
+                {e.label}
+                {e.id === "reference" && <span className="text-2xs font-normal text-muted-foreground">recommended</span>}
+              </span>
+              <span className="num text-xs font-normal text-muted-foreground">{timeFor(estimates, e.id)}</span>
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <p className="text-xs text-muted-foreground">{WIND_ENGINES.find((e) => e.id === engine)?.detail}</p>
+        {engine === "reference" && estimates?.engines?.reference?.docker_ready === false && (
+          <p className="text-xs text-gold-text">Needs Docker (Colima) running. SimLab asks before starting it.</p>
+        )}
         {estimate}
       </Step>
     </Accordion>

@@ -3,6 +3,7 @@
 // engine (src/mock) behind the very same client code.
 import type {
   Check,
+  Engine,
   EngineEvent,
   Estimate,
   Health,
@@ -24,6 +25,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** 409: what has to be set up first (the system check, with the fix to offer) */
+    readonly needs?: Check,
   ) {
     super(message);
     this.name = "ApiError";
@@ -97,7 +100,10 @@ export function createApi(t: Transport) {
     } catch {
       throw new ApiError("SimLab's engine is not answering. Is the app still open?", 0);
     }
-    if (!res.ok) throw new ApiError(await errorText(res), res.status);
+    if (!res.ok) {
+      const { message, needs } = await errorBody(res);
+      throw new ApiError(message, res.status, needs);
+    }
     if (res.status === 204) return undefined as T;
     const type = res.headers.get("content-type") ?? "";
     if (type.includes("application/json")) return (await res.json()) as T;
@@ -168,12 +174,13 @@ export function createApi(t: Transport) {
     study: (id: string) => req<Study>("GET", `/api/studies/${enc(id)}`),
     updateStudy: (id: string, p: { name?: string; config?: StudyConfig }) => req<Study>("PATCH", `/api/studies/${enc(id)}`, p),
     deleteStudy: (id: string) => req<void>("DELETE", `/api/studies/${enc(id)}`),
-    /** tolerant of the size numbers arriving at the top level (the wind tunnel's estimate) */
-    async estimate(id: string): Promise<Estimate> {
-      const r = await req<Estimate & { cells?: number; elements?: number; nodes?: number }>("POST", `/api/studies/${enc(id)}/estimate`);
+    /** for `engine`, or the test's default; wind tunnel tests also carry both engines in `engines` */
+    async estimate(id: string, engine?: Engine): Promise<Estimate> {
+      const r = await req<Estimate & { cells?: number; elements?: number; nodes?: number }>("POST", `/api/studies/${enc(id)}/estimate`, engine ? { engine } : undefined);
       return { ...r, size: r.size ?? { cells: r.cells, elements: r.elements, nodes: r.nodes } };
     },
-    startRun: (studyId: string, engine: "native" | "reference" = "native") => req<Run>("POST", `/api/studies/${enc(studyId)}/runs`, { engine }),
+    /** no engine: the test's default (Accurate for wind tunnel tests, SimLab's own for the rest) */
+    startRun: (studyId: string, engine?: Engine) => req<Run>("POST", `/api/studies/${enc(studyId)}/runs`, engine ? { engine } : undefined),
     run: (id: string) => req<Run>("GET", `/api/runs/${enc(id)}`),
     stopRun: (id: string) => req<unknown>("POST", `/api/runs/${enc(id)}/stop`),
     deleteRun: (id: string) => req<void>("DELETE", `/api/runs/${enc(id)}`),
@@ -191,19 +198,23 @@ export function createApi(t: Transport) {
 export type Api = ReturnType<typeof createApi>;
 
 async function errorText(res: Response): Promise<string> {
+  return (await errorBody(res)).message;
+}
+
+async function errorBody(res: Response): Promise<{ message: string; needs?: Check }> {
   try {
     const t = await res.text();
     try {
-      const j = JSON.parse(t) as { error?: unknown };
-      if (typeof j.error === "string" && j.error) return j.error;
+      const j = JSON.parse(t) as { error?: unknown; needs?: Check };
+      if (typeof j.error === "string" && j.error) return { message: j.error, needs: j.needs && typeof j.needs.id === "string" ? j.needs : undefined };
     } catch {
       /* not JSON */
     }
-    if (t && t.length < 300) return t;
+    if (t && t.length < 300) return { message: t };
   } catch {
     /* no body */
   }
-  return `The engine said ${res.status}${res.statusText ? ` (${res.statusText})` : ""}`;
+  return { message: `The engine said ${res.status}${res.statusText ? ` (${res.statusText})` : ""}` };
 }
 
 /** the buffers agree with each other, or a plain error */

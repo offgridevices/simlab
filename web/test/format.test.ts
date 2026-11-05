@@ -24,6 +24,7 @@ describe("numbers in words", () => {
     expect(n(3.14159)).toBe("3.14");
     expect(n(28512)).toBe("28,512");
     expect(n(0.000123)).toBe("0.000123");
+    expect(n(1.18463e-6)).toBe("1.18e−6");
     expect(n(NaN)).toBe("–");
     expect(bytes(2.5 * 1024 ** 3)).toBe("2.5 GB");
     expect(ago(new Date(Date.now() - 3 * 3600_000).toISOString())).toBe("3 h ago");

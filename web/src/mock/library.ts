@@ -58,15 +58,15 @@ export function health(checks: Check[]): Health {
 export const CHECKS: Check[] = [
   { id: "engine", label: "SimLab engine", status: "ok", detail: "Running, version 0.1.0" },
   { id: "mesher", label: "Part mesher (Gmsh)", status: "ok", detail: "Installed in SimLab's own Python, version 4.13" },
-  { id: "gpu", label: "Graphics chip for the wind tunnel", status: "ok", detail: "Metal, 18 GPU cores, shares the Mac's 36 GB" },
+  { id: "gpu", label: "Graphics chip (quick air previews)", status: "ok", detail: "Apple M3 Pro · Metal · 18 GPU cores, shares the Mac's 36 GB" },
   { id: "disk", label: "Free disk space", status: "ok", detail: "212 GB free" },
   {
-    id: "reference",
-    label: "Reference solvers (CalculiX, OpenFOAM)",
-    status: "optional",
-    detail: "Not set up. Optional: they double-check SimLab's answers, more slowly.",
-    fix: { label: "Set up", asks: "Download Colima and the reference solvers? It is about 1.2 GB, and Colima uses 8 GB of memory while it runs." },
+    id: "docker",
+    label: "Docker (needed for accurate air tests)",
+    status: "missing",
+    detail: "Installed (Colima) but not running. Accurate air tests need it; strength and propeller tests work without it.",
+    fix: { label: "Start Colima", asks: "Start Colima now? It runs a small Linux machine using up to 8 GB of memory and 8 CPU cores (your Colima settings) until you stop it or quit SimLab." },
   },
 ];
 
-export const SETTINGS: Settings = { memory_budget_gb: 18, cpu_threads: 12, default_units_mm: 1, reference_engine_enabled: false };
+export const SETTINGS: Settings = { memory_budget_gb: 18, cpu_threads: 12, default_units_mm: 1, reference_engine_enabled: true };

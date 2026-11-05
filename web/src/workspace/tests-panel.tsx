@@ -12,8 +12,8 @@ import { Confirm } from "../components/confirm";
 import { cn } from "@/lib/utils";
 import { useApp } from "../lib/app";
 import { useRun, type ProjectData } from "../lib/hooks";
-import { ago, KIND_LABEL, KIND_QUESTION, pillFor, STATUS_LABEL, STATUS_TONE } from "../lib/format";
-import type { Model, Study, StudyConfig, StudyKind } from "../lib/types";
+import { ago, engineLabel, KIND_LABEL, KIND_QUESTION, pillFor, STATUS_LABEL, STATUS_TONE } from "../lib/format";
+import type { Engine, Model, Study, StudyConfig, StudyKind } from "../lib/types";
 import type { Prepared } from "../viewer/prepare";
 import type { Nav } from "../screens/workspace";
 import { Meter } from "../components/charts";
@@ -25,6 +25,7 @@ import { RunningView } from "./running";
 import { StrengthResults } from "./results-strength";
 import { WindResults } from "./results-wind";
 import { PropResults } from "./results-prop";
+import { useStartRun } from "./start-run";
 
 export const KIND_ICON: Record<StudyKind, React.ReactNode> = {
   strength: <ShieldCheckIcon />,
@@ -118,7 +119,7 @@ function StudyList({ data, model, nav }: PanelProps) {
 
 const KINDS: { kind: StudyKind; detail: string }[] = [
   { kind: "strength", detail: "Puts loads on the part (motors, crashes, spinning) in the filament or resin you print it in, and finds where it would break." },
-  { kind: "wind", detail: "Blows air past the part in a virtual wind tunnel: drag, lift, and pictures of the flow." },
+  { kind: "wind", detail: "Blows air past the part in a virtual wind tunnel: drag, lift, a propeller's thrust and power, and pictures of the flow. Accurate (OpenFOAM) by default, or a quick preview on the graphics chip." },
   { kind: "prop", detail: "Spins a propeller through a range of speeds: how many grams it pushes and how much power it takes." },
 ];
 
@@ -217,6 +218,7 @@ function StudyView({ data, study, nav, prepared, reload }: PanelProps & { study:
           nav.go({ run: r }, true);
         }}
         tabs={runs.length ? <ShowTabs value={tab} onChange={setTab} /> : null}
+        initialEngine={runs[0]?.engine === "native" || runs[0]?.engine === "reference" ? runs[0].engine : undefined}
       />
     );
 
@@ -255,7 +257,8 @@ function StudyView({ data, study, nav, prepared, reload }: PanelProps & { study:
             <SelectContent align="end">
               {runs.map((r, i) => (
                 <SelectItem key={r.id} value={r.id}>
-                  Run {runs.length - i} · {STATUS_LABEL[r.status]} · {ago(r.created_at)}
+                  Run {runs.length - i} · {study.kind === "prop" ? "" : `${engineLabel(study.kind, r.engine).replace(/ \(.*\)$/, "")} · `}
+                  {STATUS_LABEL[r.status]} · {ago(r.created_at)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -281,6 +284,27 @@ function ShowTabs({ value, onChange }: { value: "results" | "setup"; onChange(v:
 
 function RunView({ runId, study, model, nav }: { runId: string; study: Study; model: Model | undefined; nav: Nav }) {
   const { run, error } = useRun(runId);
+  const starter = useStartRun();
+  const [startError, setStartError] = useState("");
+  const [starting, setStarting] = useState(false);
+  /** the same test again with another engine (Accurate after a preview, CalculiX after SimLab) */
+  const rerun = (engine: Engine) => {
+    setStartError("");
+    setStarting(true);
+    void starter.start(
+      study.id,
+      engine,
+      (r) => {
+        setStarting(false);
+        nav.go({ run: r }, true);
+      },
+      (m) => {
+        setStarting(false);
+        setStartError(m);
+      },
+    );
+  };
+  const again = { rerun, starting, startError, setting: starter.setting, dialog: starter.dialog };
   useScene(run?.status === "done" && run.summary?.kind !== "prop" ? {} : { source: { kind: "model", modelId: study.model_id } });
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!run) return <p className="text-sm text-muted-foreground">Loading the run…</p>;
@@ -298,7 +322,7 @@ function RunView({ runId, study, model, nav }: { runId: string; study: Study; mo
     );
   const s = run.summary;
   if (!s) return <p className="text-sm text-muted-foreground">This run finished without a summary.</p>;
-  if (s.kind === "strength") return <StrengthResults run={run} summary={s} size={model?.size_mm ? Math.max(...model.size_mm) : 100} />;
-  if (s.kind === "wind") return <WindResults run={run} summary={s} />;
+  if (s.kind === "strength") return <StrengthResults run={run} summary={s} size={model?.size_mm ? Math.max(...model.size_mm) : 100} again={again} />;
+  if (s.kind === "wind") return <WindResults run={run} summary={s} again={again} />;
   return <PropResults run={run} summary={s} model={model} onStrength={(preset) => nav.go({ study: null, run: null, new: "strength", preset: JSON.stringify(preset) })} />;
 }

@@ -3,25 +3,27 @@
 // breaks first, the key numbers as readouts, "How sure", and the numbers
 // behind it tucked into Details.
 import { useEffect, useMemo, useState } from "react";
-import { CrosshairIcon, ScrollTextIcon } from "lucide-react";
+import { CrosshairIcon, ListChecksIcon, ScrollTextIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Alert } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { useApp } from "../lib/app";
-import { useField } from "../lib/hooks";
+import { useAsync, useField } from "../lib/hooks";
 import { scaleFor } from "../lib/colormaps";
-import { duration, n } from "../lib/format";
-import type { Run, StrengthSummary } from "../lib/types";
+import { duration, engineLabel, n } from "../lib/format";
+import type { Run, StrengthCheck, StrengthSummary } from "../lib/types";
 import { Details, Row, Stat } from "../components/section";
 import { HowSure, meshFact, Segmented } from "./common";
 import { useScene, useSceneCtl } from "./scene-state";
 import { Legend } from "./legend";
 import { MetricChart, pickMetric } from "./running";
+import type { Again } from "./start-run";
 
 const DISP = ["ux", "uy", "uz"];
 const coarse = () => typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
@@ -58,8 +60,49 @@ export function VerdictCard({ s, compact }: { s: StrengthSummary; compact?: bool
   );
 }
 
-export function StrengthResults({ run, summary: s, size = 100 }: { run: Run; summary: StrengthSummary; /** the part's biggest size, mm */ size?: number }) {
+/** a CalculiX double-check next to SimLab's own run of the same test */
+function CheckCard({ c }: { c: StrengthCheck }) {
+  const pct = (v?: number | null) => (v === null || v === undefined ? "–" : `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}%`);
+  const rows: [string, number | null | undefined, number | null | undefined, number | null | undefined, string][] = [
+    ["Biggest stress", c.native.max_von_mises_mpa, c.calculix.max_von_mises_mpa, c.diff_pct.max_von_mises, "MPa"],
+    ["Safety factor", c.native.safety_factor, c.calculix.safety_factor, c.diff_pct.safety_factor, "×"],
+    ["Biggest movement", c.native.max_displacement_mm, c.calculix.max_displacement_mm, c.diff_pct.max_displacement, "mm"],
+  ];
+  return (
+    <Card className={cn("gap-2 p-3", c.agrees ? "border-moss/40 bg-moss/10" : "border-gold/40 bg-gold/10")} data-testid="calculix-check">
+      <span className={cn("text-sm font-medium", c.agrees ? "text-moss-text" : "text-gold-text")}>{c.text}</span>
+      <Table className="text-xs">
+        <TableHeader>
+          <TableRow>
+            <TableHead />
+            <TableHead className="text-right">SimLab</TableHead>
+            <TableHead className="text-right">CalculiX</TableHead>
+            <TableHead className="text-right">Difference</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map(([label, a, b, d, unit]) => (
+            <TableRow key={label}>
+              <TableCell>{label}</TableCell>
+              <TableCell className="num whitespace-nowrap text-right">
+                {n(a)} {unit}
+              </TableCell>
+              <TableCell className="num whitespace-nowrap text-right">
+                {n(b)} {unit}
+              </TableCell>
+              <TableCell className="num text-right">{pct(d)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </Card>
+  );
+}
+
+export function StrengthResults({ run, summary: s, size = 100, again }: { run: Run; summary: StrengthSummary; /** the part's biggest size, mm */ size?: number; again?: Again }) {
   const { api } = useApp();
+  const settings = useAsync(`settings:${run.id}`, () => api.settings());
+  const isCheck = (s.engine ?? run.engine) === "reference";
   const { viewer } = useSceneCtl();
   const shown = run.fields.filter((f) => !DISP.includes(f.name)).sort((a, b) => (ORDER.indexOf(a.name) + 99) % 99 - ((ORDER.indexOf(b.name) + 99) % 99));
   const [fieldName, setFieldName] = useState(() => (shown.some((f) => f.name === "safety_factor") ? "safety_factor" : shown[0]?.name ?? ""));
@@ -100,6 +143,7 @@ export function StrengthResults({ run, summary: s, size = 100 }: { run: Run; sum
   return (
     <div className="flex flex-col gap-4" data-testid="strength-results">
       <VerdictCard s={s} />
+      {s.check && <CheckCard c={s.check} />}
       <Button variant="outline" size="sm" className="self-start" onClick={() => viewer.current?.focus(s.critical_point_mm)} data-testid="show-critical">
         <CrosshairIcon />
         {s.verdict === "breaks" ? "Show where it breaks" : "Show the weakest spot"}
@@ -114,8 +158,20 @@ export function StrengthResults({ run, summary: s, size = 100 }: { run: Run; sum
 
       <HowSure
         accuracy={s.accuracy}
-        facts={[meshFact(s.elements, s.element_mm), s.solver, `solved in ${duration(s.solve_seconds)}`, run.engine !== "native" && `checked by ${run.engine}`]}
+        facts={[meshFact(s.elements, s.element_mm), s.solver, `solved in ${duration(s.solve_seconds)}`, isCheck && "CalculiX check"]}
       />
+      {again && !isCheck && settings.value?.reference_engine_enabled !== false && (
+        <div className="flex flex-col gap-1.5" data-testid="double-check">
+          <Button variant="outline" size="sm" className="self-start" onClick={() => again.rerun("reference")} disabled={again.starting} data-testid="run-calculix">
+            <ListChecksIcon />
+            {again.starting ? "Starting…" : "Double-check in CalculiX"}
+          </Button>
+          <span className="text-xs text-muted-foreground">Solves the same mesh and loads again in CalculiX, a widely used independent solver (in Docker), and compares the two.</span>
+          {again.setting && <span className="text-xs text-muted-foreground">{again.setting}</span>}
+          {again.startError && <span className="text-xs text-destructive">{again.startError}</span>}
+          {again.dialog}
+        </div>
+      )}
       {metric && (
         <div className="flex flex-col gap-1">
           <span className="text-2xs font-medium uppercase tracking-wider text-muted-foreground">How the solver settled</span>
@@ -170,7 +226,7 @@ export function StrengthResults({ run, summary: s, size = 100 }: { run: Run; sum
         <Row label="Meshing / solving">
           {duration(s.mesh_seconds)} / {duration(s.solve_seconds)}
         </Row>
-        <Row label="Solved by">{run.engine === "native" ? "SimLab" : run.engine}</Row>
+        <Row label="Solved by">{engineLabel("strength", s.engine ?? run.engine)}</Row>
         {s.reactions_n && <Row label="Held faces push back">{s.reactions_n.map((v) => n(v, 2)).join(", ")} N</Row>}
         <Button variant="ghost" size="xs" className="mt-1" onClick={async () => setLog(log === null ? await api.log(run.id).catch((e: Error) => e.message) : null)} data-testid="show-log">
           <ScrollTextIcon />

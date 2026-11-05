@@ -5,7 +5,7 @@ import { SquareIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useApp } from "../lib/app";
-import { ago, n } from "../lib/format";
+import { ago, engineLabel, n } from "../lib/format";
 import type { Run } from "../lib/types";
 import { LineChart, Meter } from "../components/charts";
 import { si } from "../lib/scales";
@@ -16,6 +16,10 @@ export const METRIC: Record<string, { label: string; log?: boolean; unit?: strin
   thrust_n: { label: "Thrust", unit: "N" },
   thrust_g: { label: "Thrust", unit: "g" },
   lift_n: { label: "Lift", unit: "N" },
+  side_n: { label: "Side force", unit: "N" },
+  torque_nm: { label: "Twist (torque)", unit: "N·m" },
+  residual_U: { label: "Air speed: how far from settled (smaller is better)", log: true },
+  residual_p: { label: "Pressure: how far from settled (smaller is better)", log: true },
 };
 const ORDER = ["thrust_n", "drag_n", "thrust_g", "residual"];
 
@@ -29,7 +33,7 @@ export function MetricChart({ run, name, height = 150, compact }: { run: Run; na
   const m = METRIC[name] ?? { label: name.replace(/_/g, " ") };
   return (
     <LineChart
-      series={[{ name: m.label, xs: pts.map((p) => p[0]), ys: pts.map((p) => p[1]), color: name === "residual" ? 3 : 1 }]}
+      series={[{ name: m.label, xs: pts.map((p) => p[0]), ys: pts.map((p) => p[1]), color: name.startsWith("residual") ? 3 : 1 }]}
       yLog={m.log}
       height={height}
       fmtX={(v) => si(v)}
@@ -50,7 +54,10 @@ export function RunningView({ run }: { run: Run }) {
     <div className="flex flex-col gap-4" data-testid="running" aria-live="polite">
       <div className="flex flex-col gap-3 rounded-xl border border-ember/30 bg-ember/[0.05] p-4">
         <div className="flex items-center justify-between gap-2">
-          <Badge tone={waiting ? "neutral" : "ember"}>{waiting ? "Waiting for its turn" : "Running"}</Badge>
+          <span className="flex min-w-0 flex-wrap items-center gap-2">
+            <Badge tone={waiting ? "neutral" : "ember"}>{waiting ? "Waiting for its turn" : "Running"}</Badge>
+            {run.config.kind !== "prop" && <span className="text-xs text-muted-foreground">{engineLabel(run.config.kind, run.engine)}</span>}
+          </span>
           <span className="num text-sm font-semibold">{Math.round(run.progress * 100)}%</span>
         </div>
         <Meter value={run.progress} tone="ember" label="How far along" />

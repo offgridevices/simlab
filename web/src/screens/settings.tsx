@@ -118,7 +118,7 @@ export default function Settings() {
               </Label>
               <Label className="flex flex-col items-stretch gap-3">
                 <span className="flex items-baseline justify-between gap-2 text-sm font-medium">
-                  Processor cores for the strength test
+                  Processor cores for strength tests and OpenFOAM
                   <span className="num text-base">
                     {settings.cpu_threads} <span className="text-sm font-normal text-muted-foreground">of {health.machine.cores}</span>
                   </span>
@@ -140,10 +140,10 @@ export default function Settings() {
               </div>
               <Label className="flex items-center justify-between gap-4 text-sm">
                 <span>
-                  <span className="font-medium">Double-check with reference solvers</span>
-                  <span className="block text-muted-foreground">Offers to re-run tests in CalculiX and OpenFOAM (in Docker). Slower; needs the system check below.</span>
+                  <span className="font-medium">Offer a CalculiX double-check on strength results</span>
+                  <span className="block text-muted-foreground">Solves the same strength test again in CalculiX (in Docker) and compares. Accurate air tests always use OpenFOAM in Docker; see the system check below.</span>
                 </span>
-                <Switch checked={settings.reference_engine_enabled} onCheckedChange={(v) => setSettings({ ...settings, reference_engine_enabled: v })} aria-label="Double-check with reference solvers" />
+                <Switch checked={settings.reference_engine_enabled} onCheckedChange={(v) => setSettings({ ...settings, reference_engine_enabled: v })} aria-label="Offer a CalculiX double-check on strength results" />
               </Label>
               <div className="flex items-center gap-3">
                 <Button onClick={save} disabled={!dirty} data-testid="save-settings">

@@ -30,8 +30,10 @@ export interface UpdateResult {
 }
 export interface Settings {
   memory_budget_gb: number;
+  /** cores for the strength test, OpenFOAM and CalculiX */
   cpu_threads: number;
   default_units_mm: number;
+  /** offer "Double-check in CalculiX" on strength results */
   reference_engine_enabled: boolean;
 }
 
@@ -77,7 +79,12 @@ export interface Motor {
 // ---------------------------------------------------------------- projects and models
 
 export type RunStatus = "queued" | "running" | "done" | "failed" | "stopped";
-export type Engine = "native" | "calculix" | "openfoam" | "reference";
+/**
+ * Which solver a run uses. Wind tunnel: "reference" = Accurate (OpenFOAM in
+ * Docker, the default), "native" = Quick preview (GPU). Strength: "native" =
+ * SimLab's own solver (the default), "reference" = the CalculiX double-check.
+ */
+export type Engine = "native" | "reference";
 export interface RunBrief {
   id: string;
   status: RunStatus;
@@ -248,9 +255,18 @@ export interface Estimate {
   fits: boolean;
   memory_bytes: number;
   budget_bytes: number;
-  size: { elements?: number; nodes?: number; cells?: number };
+  size: { elements?: number; nodes?: number; cells?: number; dofs?: number };
   seconds: number;
   note: string;
+  engine?: Engine;
+  /** "Accurate (OpenFOAM)", "Quick preview (GPU)", "CalculiX check" */
+  label?: string;
+  /** false when this engine cannot run this test (the note says why) */
+  available?: boolean;
+  /** OpenFOAM/CalculiX: Docker is running with the reference image */
+  docker_ready?: boolean;
+  /** wind tunnel tests: both engines' estimates, to show next to each choice */
+  engines?: Partial<Record<Engine, Estimate>>;
 }
 
 // ---------------------------------------------------------------- runs and results
@@ -295,6 +311,19 @@ export interface StrengthSummary {
   accuracy?: Accuracy | null;
   /** element size used, model mm */
   element_mm?: number | null;
+  /** "reference" for a CalculiX double-check */
+  engine?: Engine;
+  /** a CalculiX double-check next to the latest SimLab run of the same test */
+  check?: StrengthCheck | null;
+}
+export interface StrengthCheck {
+  native_run_id: string;
+  /** one plain sentence, e.g. "CalculiX agrees with SimLab: peak stress +0.3%, safety factor −0.2%." */
+  text: string;
+  agrees: boolean;
+  native: { max_von_mises_mpa?: number | null; safety_factor?: number | null; max_displacement_mm?: number | null };
+  calculix: { max_von_mises_mpa?: number | null; safety_factor?: number | null; max_displacement_mm?: number | null };
+  diff_pct: { max_von_mises?: number | null; safety_factor?: number | null; max_displacement?: number | null };
 }
 export interface WindSummary {
   kind: "wind";
@@ -311,12 +340,27 @@ export interface WindSummary {
   power_w?: number | null;
   reynolds: number;
   cells: number;
+  /** GPU: time steps; OpenFOAM: solver iterations */
   steps: number;
-  mlups: number;
+  /** GPU only: million cell updates a second */
+  mlups?: number | null;
   seconds: number;
   converged: boolean;
   warnings: string[];
   accuracy?: Accuracy | null;
+  /** "reference" (Accurate, OpenFOAM) or "native" (Quick preview, GPU) */
+  engine?: Engine;
+  /** "Accurate (OpenFOAM)" or "Quick preview (GPU)" */
+  method?: string;
+  /** quick previews: how rough the numbers are, in one sentence */
+  preview_note?: string | null;
+  thrust_g?: number | null;
+  rpm?: number | null;
+  /** OpenFOAM */
+  iterations?: number | null;
+  turbulence?: string | null;
+  /** y+ on the part: min, average, max */
+  y_plus?: [number, number, number] | null;
 }
 export interface PropPoint {
   rpm: number;

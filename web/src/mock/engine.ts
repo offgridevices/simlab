@@ -5,6 +5,7 @@
 import type { Transport } from "../lib/api";
 import type {
   Check,
+  Engine,
   EngineEvent,
   Estimate,
   Material,
@@ -18,6 +19,7 @@ import type {
   Study,
   StudyConfig,
   Vec3,
+  WindSummary,
 } from "../lib/types";
 import { makeFrame, makeMount, makePropeller, type SampleMesh } from "../lib/samples";
 import { CHECKS, MATERIALS, MOTORS, RAM, SETTINGS, health } from "./library";
@@ -134,14 +136,67 @@ function solve(rec: RunRec) {
   const cfg = rec.run.config;
   if (cfg.kind === "strength") {
     const mat = materials.find((m) => m.id === cfg.material_id) ?? materials[0]!;
-    const { fields, summary } = strength(mesh, mrec.model, cfg, mat);
+    const { fields, summary: own } = strength(mesh, mrec.model, cfg, mat);
+    let summary = own;
+    if (rec.run.engine === "reference") {
+      // CalculiX on the same mesh lands within a fraction of a percent
+      const ccx = { ...own, engine: "reference" as const, max_von_mises_mpa: own.max_von_mises_mpa * 1.002, safety_factor: own.safety_factor / 1.001, solver: "CalculiX 2.21: SPOOLES direct solver, linear" };
+      const native = [...runs.values()].filter((r) => r.run.study_id === rec.run.study_id && r.run.engine === "native" && r.run.status === "done" && r.run.summary?.kind === "strength").at(-1);
+      const ns = native?.run.summary?.kind === "strength" ? native.run.summary : null;
+      const pct = (a: number, b: number) => (100 * (a - b)) / b;
+      summary = ns
+        ? {
+            ...ccx,
+            check: {
+              native_run_id: native!.run.id,
+              text: `CalculiX agrees with SimLab: peak stress ${pct(ccx.max_von_mises_mpa, ns.max_von_mises_mpa).toFixed(1)}%, safety factor ${pct(ccx.safety_factor, ns.safety_factor).toFixed(1)}%.`,
+              agrees: true,
+              native: { max_von_mises_mpa: ns.max_von_mises_mpa, safety_factor: ns.safety_factor, max_displacement_mm: ns.max_displacement_mm },
+              calculix: { max_von_mises_mpa: ccx.max_von_mises_mpa, safety_factor: ccx.safety_factor, max_displacement_mm: ccx.max_displacement_mm },
+              diff_pct: { max_von_mises: pct(ccx.max_von_mises_mpa, ns.max_von_mises_mpa), safety_factor: pct(ccx.safety_factor, ns.safety_factor), max_displacement: 0 },
+            },
+          }
+        : ccx;
+    }
     rec.fields = fields;
     rec.run.material = mat;
     rec.run.summary = summary;
     rec.run.fields = fields.infos;
     rec.series = { residual: decay(70, 1, 1e-9) };
   } else if (cfg.kind === "wind") {
-    const { fields, summary, slices } = wind(mesh, mrec.model, cfg);
+    const { fields, summary: base, slices } = wind(mesh, mrec.model, cfg);
+    const spin = !!(cfg.spin && cfg.spin.rpm > 0);
+    const preview = rec.run.engine === "native";
+    const note = spin ? "Rough picture only: thrust can be 30–60% off, use Accurate for numbers." : "Drag within about 3% on simple shapes at low Reynolds number, less certain above.";
+    // the preview reads differently from the accurate answer, as the real GPU tunnel does on propellers
+    const k = preview && spin ? 0.62 : 1;
+    const summary: WindSummary = preview
+      ? {
+          ...base,
+          thrust_n: base.thrust_n ? base.thrust_n * k : base.thrust_n,
+          headline: `${spin ? "Rough preview:" : "Quick preview:"} ${base.headline}`,
+          engine: "native",
+          method: "Quick preview (GPU)",
+          preview_note: note,
+          warnings: [note, ...base.warnings],
+          accuracy: { method: "SimLab's GPU wind tunnel: lattice Boltzmann (D3Q19, LES)", checked_against: spin ? "OpenFOAM runs of two 3-inch props" : "Sphere drag from Reynolds number 20 to 10,000", typical_error: note },
+        }
+      : {
+          ...base,
+          engine: "reference",
+          method: "Accurate (OpenFOAM)",
+          mlups: null,
+          steps: spin ? 774 : 1100,
+          iterations: spin ? 774 : 1100,
+          cells: Math.round(base.cells / 4.3),
+          turbulence: "k-omega SST",
+          seconds: spin ? 560 : 420,
+          accuracy: {
+            method: "OpenFOAM v2606: snappyHexMesh, steady RANS with k-ω SST, the spin as a moving reference frame",
+            checked_against: spin ? "Your 2026 OpenFOAM propeller study (E-v5, P-v2)" : "Sphere drag at Reynolds number 100 and 1000",
+            typical_error: spin ? "Thrust within about 3% and torque within about 7%; within 0.6% of your earlier OpenFOAM runs of the same props." : "Drag within about 1% on simple shapes (sphere 0.2–1.3%).",
+          },
+        };
     rec.fields = fields;
     rec.slices = slices;
     rec.run.summary = summary;
@@ -330,6 +385,7 @@ function seed() {
   const stack = (frame.model.patches ?? []).filter((p) => /stack hole/i.test(p.label ?? "")).map((p) => p.id);
   const s1 = addStudy(frameP, frame, "Full-throttle punch-out", { kind: "strength", material_id: "pa12-cf", print_up: [0, 0, 1], support: { type: "free_flying" }, loads: motorLoads(1450, 33), quality: { type: "normal" } }, minutesAgo(200));
   newRun(s1, { done: true, at: minutesAgo(190) });
+  newRun(s1, { done: true, at: minutesAgo(180), engine: "reference" });
   const s2 = addStudy(
     frameP,
     frame,
@@ -339,7 +395,7 @@ function seed() {
   );
   newRun(s2, { done: true, at: minutesAgo(110) });
   const s3 = addStudy(frameP, frame, "Forward flight, 20 m/s", { kind: "wind", wind_dir: [-1, 0, 0], speed_m_s: 20, spin: null, quality: { type: "normal" } }, minutesAgo(60));
-  newRun(s3, { done: true, at: minutesAgo(35) });
+  newRun(s3, { done: true, at: minutesAgo(35), engine: "reference" });
 
   const propP = addProject("Tri-blade 5-inch prop", "Resin print, testing how fast it can spin.", 300);
   const pm = addModel(propP, "Prop 5143", "prop-5143.stl", () => makePropeller());
@@ -348,6 +404,9 @@ function seed() {
   newRun(s4, { done: true, at: minutesAgo(410) });
   const s4b = addStudy(propP, pm, "Thrust sweep, as a 2-blade", { kind: "prop", axis: pg.axis, center_mm: pg.center_mm, rpm_min: 5000, rpm_max: 32000, rpm_steps: 12, airspeeds_m_s: [0, 10], blades: 2 }, minutesAgo(380));
   newRun(s4b, { done: true, at: minutesAgo(370) });
+  const s4c = addStudy(propP, pm, "Hover at 32,000 rpm", { kind: "wind", wind_dir: [0, 0, -1], speed_m_s: 0, spin: { rpm: 32000, axis: pg.axis, center_mm: pg.center_mm }, quality: { type: "draft" } }, minutesAgo(360));
+  newRun(s4c, { done: true, at: minutesAgo(355), engine: "native" });
+  newRun(s4c, { done: true, at: minutesAgo(340), engine: "reference" });
   const hub = (pm.model.patches ?? []).filter((p) => /shaft hole|bottom face/i.test(p.label ?? "")).map((p) => p.id);
   const s5 = addStudy(
     propP,
@@ -410,7 +469,15 @@ function summaryOf(p: Project): ProjectSummary {
   return { ...p, models: ms.length, studies: ss.length, runs: rs.length, last_run: rs[0] ?? null, thumbnail_model_id: ms[0]?.model.id ?? null };
 }
 
-function estimate(study: Study): Estimate {
+function estimate(study: Study, engine?: Engine): Estimate {
+  if (study.config.kind !== "wind") return estimateOne(study, engine ?? "native");
+  const docker = checks.find((c) => c.id === "docker");
+  const reference = { ...estimateOne(study, "reference"), docker_ready: docker?.status === "ok" };
+  const native = estimateOne(study, "native");
+  return { ...(engine === "native" ? native : reference), engines: { reference, native } };
+}
+
+function estimateOne(study: Study, engine: Engine): Estimate {
   const m = models.get(study.model_id);
   const budget = settings.memory_budget_gb * 1024 ** 3;
   const c = study.config;
@@ -421,6 +488,14 @@ function estimate(study: Study): Estimate {
     mem = nodes * 3 * 300 * 8 * (m && (m.model.triangles ?? 0) > 500_000 ? 3 : 1);
     secs = el / 9000;
     size = { elements: el, nodes };
+  } else if (c.kind === "wind" && engine === "reference") {
+    // OpenFOAM: about 2 M cells at Normal, 10 minutes for a propeller
+    const cells = { draft: 590_000, normal: 1_860_000, fine: 2_310_000, custom: 1_860_000 }[c.quality.type];
+    mem = 0.4e9 + 1700 * cells;
+    secs = 30 + cells * (c.quality.type === "fine" ? 6.6e-4 : c.quality.type === "draft" ? 3.8e-4 : 3.0e-4);
+    size = { cells };
+    const docker = 16 * 1024 ** 3;
+    return { fits: mem <= docker, memory_bytes: mem, budget_bytes: docker, size, seconds: secs, note: `About ${cells.toLocaleString("en-US")} cells, 12 cores in Docker`, engine, label: "Accurate (OpenFOAM)", available: true };
   } else if (c.kind === "wind") {
     const cells = { draft: 2_000_000, normal: 8_000_000, fine: 24_000_000, custom: (c.quality.type === "custom" ? c.quality.cells_across : 200) ** 3 / 4 }[c.quality.type];
     mem = cells * 19 * 4 * 2 + 2e8;
@@ -439,6 +514,9 @@ function estimate(study: Study): Estimate {
     size,
     seconds: secs,
     note: fits ? "" : "This needs more memory than your budget. Try Draft, or raise the budget in Settings.",
+    engine,
+    label: c.kind === "wind" ? "Quick preview (GPU)" : engine === "reference" ? "CalculiX check" : undefined,
+    available: true,
   };
 }
 
@@ -462,7 +540,7 @@ async function handle(method: string, path: string, body: unknown): Promise<Resp
       pct += 20;
       if (pct >= 100) {
         clearInterval(t);
-        Object.assign(chk, { status: "ok", detail: "Ready: CalculiX 2.21 and OpenFOAM 2312 in Colima" });
+        Object.assign(chk, chk.id === "docker" ? { status: "ok", label: "Accurate air tests (OpenFOAM + CalculiX)", detail: "Ready in Docker · 8 cores, 8 GB" } : { status: "ok", detail: "Ready" });
         delete chk.fix;
       } else chk.detail = `Downloading… ${pct}%`;
       emit({ type: "check", check: { ...chk } });
@@ -615,9 +693,16 @@ async function handle(method: string, path: string, body: unknown): Promise<Resp
         return new Response(null, { status: 204 });
       }
     }
-    if (c === "estimate" && method === "POST") return json(estimate(st));
+    if (c === "estimate" && method === "POST") return json(estimate(st, (body as { engine?: Engine } | undefined)?.engine));
     if (c === "runs" && method === "POST") {
-      const engine = (body as { engine?: string } | undefined)?.engine === "reference" ? (st.kind === "wind" ? "openfoam" : "calculix") : "native";
+      // the engine's rule: Accurate (OpenFOAM) unless told otherwise for wind tunnel tests, SimLab's own for the rest
+      const asked = (body as { engine?: string } | undefined)?.engine;
+      if (asked && asked !== "native" && asked !== "reference") throw new HttpError(400, "engine must be reference or native");
+      if (asked === "reference" && st.kind === "prop") throw new HttpError(400, "the propeller test has no reference engine");
+      const engine: Engine = asked === "native" || asked === "reference" ? asked : st.kind === "wind" ? "reference" : "native";
+      const docker = checks.find((x) => x.id === "docker");
+      if (engine === "reference" && docker && docker.status !== "ok")
+        return json({ error: "Accurate air tests and CalculiX checks run OpenFOAM and CalculiX in Docker, and Docker is not ready. Open Settings → System check and press Start Colima (or Build reference image), then run the test again.", needs: { ...docker } }, 409);
       const rec = newRun(st, { engine });
       emitRun(rec);
       startTicking();

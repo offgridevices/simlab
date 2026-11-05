@@ -8,8 +8,8 @@ import { PlayIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useApp } from "../lib/app";
-import { bytes, duration, KIND_LABEL, n } from "../lib/format";
-import type { Estimate, Model, StudyConfig } from "../lib/types";
+import { bytes, defaultEngine, duration, KIND_LABEL, n } from "../lib/format";
+import type { Engine, Estimate, Model, StudyConfig } from "../lib/types";
 import type { Prepared } from "../viewer/prepare";
 import { Meter } from "../components/charts";
 import { Panel } from "./common";
@@ -17,6 +17,7 @@ import { KindIcon } from "./tests-panel";
 import { StrengthSteps, strengthProblems } from "./strength-form";
 import { WindSteps, windProblems } from "./wind-form";
 import { PropSteps, propProblems } from "./prop-form";
+import { useStartRun } from "./start-run";
 
 export interface StepsProps<C extends StudyConfig> {
   config: C;
@@ -26,6 +27,11 @@ export interface StepsProps<C extends StudyConfig> {
   step: number;
   setStep(n: number): void;
   estimate: ReactNode;
+  /** the engine the Run button uses (wind tunnel: Accurate or Quick preview) */
+  engine: Engine;
+  setEngine(e: Engine): void;
+  /** the engine's estimate, with every engine's under `engines` */
+  estimates: Estimate | null;
 }
 
 export function problems(c: StudyConfig): string[] {
@@ -42,6 +48,7 @@ export function StudyForm({
   onBack,
   onStarted,
   tabs,
+  initialEngine,
 }: {
   projectId: string;
   model: Model;
@@ -52,9 +59,13 @@ export function StudyForm({
   onBack(): void;
   onStarted(studyId: string, runId: string): void;
   tabs?: ReactNode;
+  /** the engine to offer first (a test run before: the engine it last used) */
+  initialEngine?: Engine;
 }) {
   const { api } = useApp();
   const [config, setConfig] = useState<StudyConfig>(initial);
+  const [engine, setEngine] = useState<Engine>(initialEngine ?? defaultEngine(initial.kind));
+  const starter = useStartRun();
   const [name, setName] = useState(initialName);
   const [step, setStep] = useState(studyId ? -1 : 1);
   const [busy, setBusy] = useState(false);
@@ -125,20 +136,24 @@ export function StudyForm({
     if (!ready || busy) return;
     setBusy(true);
     setError("");
+    const fail = (message: string) => {
+      started.current = false;
+      setError(message);
+      setBusy(false);
+    };
     try {
       started.current = true;
       const id = await save();
-      const r = await api.startRun(id);
-      onStarted(id, r.id);
+      // only wind tunnel tests pick an engine here; the rest use their default
+      await starter.start(id, config.kind === "wind" ? engine : undefined, (runId) => onStarted(id, runId), fail);
     } catch (e) {
-      started.current = false;
-      setError(e instanceof Error ? e.message : "Could not start the run");
-      setBusy(false);
+      fail(e instanceof Error ? e.message : "Could not start the run");
     }
   };
 
-  const estimate = needsEstimate ? <EstimateLine est={est} /> : null;
-  const props = { model, prepared, step, setStep, estimate };
+  const chosen = config.kind === "wind" ? (est.value?.engines?.[engine] ?? est.value) : est.value;
+  const estimate = needsEstimate ? <EstimateLine est={{ ...est, value: chosen ?? null }} /> : null;
+  const props = { model, prepared, step, setStep, estimate, engine, setEngine, estimates: est.value };
 
   return (
     <Panel
@@ -158,11 +173,17 @@ export function StudyForm({
               {error}
             </p>
           )}
-          {est.value && !est.value.fits && needsEstimate && <p className="text-xs text-gold-text">{est.value.note || "This may not fit in your memory budget."}</p>}
+          {chosen && !chosen.fits && needsEstimate && <p className="text-xs text-gold-text">{chosen.note || "This may not fit in your memory budget."}</p>}
+          {starter.setting && (
+            <p className="text-xs text-muted-foreground" role="status" data-testid="setting-up">
+              {starter.setting}
+            </p>
+          )}
           <Button onClick={run} disabled={!ready || busy} size="lg" className="w-full" data-testid="run">
             <PlayIcon />
             {busy ? "Starting…" : studyId ? "Run again" : "Run the test"}
           </Button>
+          {starter.dialog}
         </div>
       }
     >
@@ -186,6 +207,7 @@ function EstimateLine({ est }: { est: { value: Estimate | null; loading: boolean
   if (est.error) return <p className="text-xs text-muted-foreground">{est.error}</p>;
   const e = est.value;
   if (!e) return <p className="text-xs text-muted-foreground">{est.loading ? "Working out how long it takes…" : ""}</p>;
+  if (e.available === false) return <p className="text-xs text-muted-foreground">{e.note}</p>;
   const share = e.budget_bytes ? e.memory_bytes / e.budget_bytes : 0;
   const size = e.size?.elements ? `${n(e.size.elements)} pieces` : e.size?.cells ? `${n(e.size.cells)} air cells` : "";
   return (
@@ -199,7 +221,7 @@ function EstimateLine({ est }: { est: { value: Estimate | null; loading: boolean
           {bytes(e.memory_bytes)} of {bytes(e.budget_bytes)}
         </span>
       </div>
-      <Meter value={share} tone={e.fits ? (share > 0.75 ? "gold" : "moss") : "clay"} label="Memory it needs, of your budget" />
+      <Meter value={share} tone={e.fits ? (share > 0.75 ? "gold" : "moss") : "clay"} label={e.engine === "reference" ? "Memory it needs, of Docker's" : "Memory it needs, of your budget"} />
       {est.loading && <span className="text-xs text-muted-foreground">Updating…</span>}
     </div>
   );

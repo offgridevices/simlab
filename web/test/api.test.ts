@@ -107,4 +107,49 @@ describe("demo engine, through the real client", () => {
     const list = await api.projects();
     expect(list.find((x) => x.id === p.id)?.last_run?.headline).toBe(done.headline);
   });
+
+  it("runs wind tests Accurate by default, asks for Docker first, and marks quick previews as rough", async () => {
+    const api = createApi(mockTransport({ latency: 0 }));
+    const events: EngineEvent[] = [];
+    api.subscribe((e) => events.push(e));
+    const p = await api.createProject({ name: "Prop" });
+    const m = await api.uploadModel(p.id, toStl(makeFrame()), { fileName: "prop.stl" });
+    await vi.advanceTimersByTimeAsync(1500);
+    const ready = await api.model(m.id);
+    const g = ready.suggestions!.prop!;
+    const study = await api.createStudy(p.id, { name: "Hover", model_id: m.id, config: { kind: "wind", wind_dir: [0, 0, -1], speed_m_s: 0, spin: { rpm: 30000, axis: g.axis, center_mm: g.center_mm }, quality: { type: "draft" } } });
+
+    const est = await api.estimate(study.id);
+    expect(est.engine).toBe("reference");
+    expect(est.engines?.reference?.label).toBe("Accurate (OpenFOAM)");
+    expect(est.engines?.native?.label).toBe("Quick preview (GPU)");
+    expect(est.engines?.reference?.docker_ready).toBe(false);
+
+    // Docker is not running: the engine says what to fix instead of queueing a run that cannot start
+    const refused = await api.startRun(study.id).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(ApiError);
+    expect((refused as ApiError).status).toBe(409);
+    expect((refused as ApiError).needs?.id).toBe("docker");
+    expect((refused as ApiError).needs?.fix?.asks).toMatch(/Colima/);
+    await api.fix("docker");
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(events.filter((e) => e.type === "check" && e.check.id === "docker").at(-1)).toMatchObject({ check: { status: "ok" } });
+
+    const accurate = await api.startRun(study.id);
+    expect(accurate.engine).toBe("reference");
+    const quick = await api.startRun(study.id, "native");
+    expect(quick.engine).toBe("native");
+    await vi.advanceTimersByTimeAsync(30_000);
+    const a = await api.run(accurate.id);
+    const q = await api.run(quick.id);
+    expect(a.status).toBe("done");
+    expect(q.status).toBe("done");
+    if (a.summary?.kind !== "wind" || q.summary?.kind !== "wind") throw new Error("wind summaries expected");
+    expect(a.summary.engine).toBe("reference");
+    expect(a.summary.preview_note ?? null).toBeNull();
+    expect(q.summary.headline).toMatch(/^Rough preview:/);
+    expect(q.summary.preview_note).toMatch(/30–60% off/);
+    expect(q.summary.warnings[0]).toBe(q.summary.preview_note);
+    expect(q.summary.accuracy?.typical_error).toMatch(/30–60% off/);
+  });
 });

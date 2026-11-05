@@ -1,5 +1,5 @@
 // Numbers and words the way people read them.
-import type { Load, Material, Patch, RunBrief, RunStatus, StudyKind, Summary, Vec3 } from "./types";
+import type { Engine, Load, Material, Patch, RunBrief, RunStatus, StudyKind, Summary, Vec3 } from "./types";
 
 export type Tone = "neutral" | "ember" | "moss" | "sky" | "gold" | "plum" | "clay";
 
@@ -9,6 +9,8 @@ export function n(v: number | null | undefined, digits = 3): string {
   if (v === 0) return "0";
   const a = Math.abs(v);
   if (a >= 1000) return Math.round(v).toLocaleString("en-US");
+  // tiny values (a slow-air drag in newtons) would round away to 0.000001
+  if (a < 1e-4) return v.toExponential(Math.max(0, digits - 1)).replace("e-", "e−");
   const s = Number(v.toPrecision(digits));
   return s.toLocaleString("en-US", { maximumFractionDigits: 6 });
 }
@@ -50,6 +52,18 @@ export const KIND_QUESTION: Record<StudyKind, string> = {
   wind: "How does air flow around it?",
   prop: "How much does it push?",
 };
+/** what a run was solved with, in the words the app uses */
+export function engineLabel(kind: StudyKind, engine: Engine | string | undefined): string {
+  if (kind === "wind") return engine === "native" ? "Quick preview (GPU)" : "Accurate (OpenFOAM)";
+  if (kind === "strength") return engine === "reference" ? "CalculiX check" : "SimLab";
+  return "SimLab";
+}
+
+/** the engine a new run of this kind uses unless the user picks another */
+export function defaultEngine(kind: StudyKind): Engine {
+  return kind === "wind" ? "reference" : "native";
+}
+
 export const KIND_TONE: Record<StudyKind, Tone> = { strength: "ember", wind: "sky", prop: "plum" };
 
 export const STATUS_LABEL: Record<RunStatus, string> = { queued: "Waiting", running: "Running", done: "Done", failed: "Failed", stopped: "Stopped" };
