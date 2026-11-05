@@ -1153,16 +1153,16 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
 
     // warnings
     if !converged {
-        warnings.push(format!("forces had not settled to {:.1} % by the end of the run; the numbers are averages over the last part", opt.tolerance * 100.0));
+        warnings.push(format!("The forces had not settled to within {:.1}% by the end of the run, so the numbers are averages over its last part.", opt.tolerance * 100.0));
     }
     if p.blockage > 0.06 {
-        warnings.push(format!("the part blocks {:.1} % of the tunnel cross-section; drag may read high", p.blockage * 100.0));
+        warnings.push(format!("The part fills {:.1}% of the tunnel's cross-section, so drag may read a little high.", p.blockage * 100.0));
     }
     let tau0 = 0.5 + 3.0 * p.nu_lat;
     let wall_cells_re = if p.spin { reynolds } else { speed * p.dx / cfg.air.kinematic_viscosity };
     if tau0 < 0.502 && wall_cells_re > 300.0 {
         warnings.push(format!(
-            "the boundary layer is thinner than a grid cell (cell Reynolds number {:.0}); the turbulence model carries the flow, so skin friction and separation are approximate",
+            "The thin layer of air hugging the surface is finer than one grid cell here (cell Reynolds number {:.0}), so surface friction and where the flow breaks away are approximate.",
             wall_cells_re
         ));
     }

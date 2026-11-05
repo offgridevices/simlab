@@ -26,7 +26,7 @@ pub const G: f64 = 9.80665;
 
 /// The one-line accuracy notes. They lead the headline of every quick
 /// preview, so nobody reads a preview's number as the answer.
-pub const PREVIEW_NOTE_STILL: &str = "Quick preview. On test shapes, drag is within about 5% for rounded bodies (sphere, Re 20 to 10,000) and reads about 10–15% low on sharp-edged plates. Lift, side force and anything that depends on thin boundary layers (airfoils, wings, small fins) are less certain, and can be off by 20% or more. Use the OpenFOAM test for numbers you will rely on.";
+pub const PREVIEW_NOTE_STILL: &str = "Quick preview: on test shapes, drag came within about 5% on rounded parts (a sphere, Re 20 to 20,000) and read about 10–15% low on sharp-edged plates. Lift, side force and anything that depends on thin boundary layers (airfoils, wings, small fins) are less certain, and can be off by 20% or more. Use the OpenFOAM test for numbers you will rely on.";
 pub const PREVIEW_NOTE_SPIN: &str = "Rough picture only: thrust can be 30–90% off (quick previews of a 3-inch prop read 32–50 g where OpenFOAM gets 345 g); use Accurate for numbers.";
 
 /// What the run settles on before it starts: where the part spins about.
@@ -129,7 +129,7 @@ pub fn reference_still_accuracy(re: f64) -> Value {
         json!({
             "method": "OpenFOAM v2606: snappyHexMesh mesh with boundary-layer cells, steady RANS with k-ω SST and the Langtry–Menter transition model (the boundary layer stays laminar until it separates, as on a small part in calm air)",
             "checked_against": "Sphere at Reynolds number 10,000 (+0.7% Draft, −8% Normal), 20,000 (−9% Draft, −15% Normal) and 100,000 (−26% Draft); square plate across the wind at 20,000 (+6%); circular cylinder at 20,000 (+1 to +3%)",
-            "typical_error": "Sharp-edged and cylindrical parts (plates, arms) within about 6% up to Re 20,000. Rounded, ball-like parts read low: about 8% near Re 10,000, 10–15% at Re 20,000 and 25% or more near Re 100,000, and a finer mesh does not close the gap: the real boundary layer there separates and its wake swings in a way a steady model cannot follow. SimLab's quick preview has come closer on a sphere at Re 20,000 (within 1%), so check rounded parts there too.",
+            "typical_error": "Rounded, ball-like parts read low at this speed (about 8% near Re 10,000, 10–15% at 20,000, 25% or more near 100,000); sharp-edged and cylindrical parts (plates, arms) come within about 6% up to Re 20,000. A finer mesh does not close the gap for rounded parts: the real boundary layer there separates and its wake swings in a way a steady model cannot follow. SimLab's quick preview has come closer on a sphere at Re 20,000 (within 1%), so check rounded parts there too.",
         })
     }
 }
