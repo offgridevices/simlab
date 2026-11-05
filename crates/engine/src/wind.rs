@@ -27,7 +27,7 @@ pub const G: f64 = 9.80665;
 /// The one-line accuracy notes. They lead the headline of every quick
 /// preview, so nobody reads a preview's number as the answer.
 pub const PREVIEW_NOTE_STILL: &str = "Drag within about 3% on simple shapes at low Reynolds number, less certain above.";
-pub const PREVIEW_NOTE_SPIN: &str = "Rough picture only: thrust can be 30–60% off, use Accurate for numbers.";
+pub const PREVIEW_NOTE_SPIN: &str = "Rough picture only: thrust can be 30–90% off (quick previews of a 3-inch prop read 32–50 g where OpenFOAM gets 345 g); use Accurate for numbers.";
 
 /// What the run settles on before it starts: where the part spins about.
 /// A config without `spin.center_mm` gets the hub the model analysis found
@@ -100,8 +100,8 @@ pub fn accuracy(engine: &str, spin: bool) -> Value {
         }),
         (_, true) => json!({
             "method": "SimLab's GPU wind tunnel: lattice Boltzmann (D3Q19, LES), the part re-drawn on the grid as it turns",
-            "checked_against": "OpenFOAM runs of E-v5 and P-v2 at 17,000–45,800 rpm (Normal and Fine: thrust 29–63% low); E-v5 at Draft: 86% low",
-            "typical_error": format!("{PREVIEW_NOTE_SPIN} At Draft it can be far worse: E-v5 at 45,800 rpm read 50 g of thrust against OpenFOAM's 345 g. Torque can be 20–55% high, or double at Draft. Good for seeing the flow, not for the numbers."),
+            "checked_against": "OpenFOAM runs of E-v5 and P-v2 at 17,000–45,800 rpm (full Normal and Fine grids: thrust 29–63% low); E-v5 quick previews (57–64 cells across): 86–91% low",
+            "typical_error": format!("{PREVIEW_NOTE_SPIN} Torque can be 20–55% high, or more than double in a quick preview. Good for seeing the flow, not for the numbers."),
         }),
         (_, false) => json!({
             "method": "SimLab's GPU wind tunnel: lattice Boltzmann (D3Q19, LES) with interpolated walls",
@@ -140,14 +140,15 @@ fn openfoam(ctx: &Ctx, r: &RunRow, cfg: &WindConfig, surf_m: &TriMesh, spin: boo
     ctx.phase("running", 0.98, 1.0);
     ctx.report(0.0, "Saving the results");
     ctx.log(&format!("OpenFOAM log: {}", res.log_path.display()));
-    // the split-up copies of the case are as big as the case itself
-    if let Ok(rd) = std::fs::read_dir(&res.case_dir) {
-        for e in rd.flatten() {
-            if e.file_name().to_string_lossy().starts_with("processor") {
-                let _ = std::fs::remove_dir_all(e.path());
-            }
-        }
-    }
+    let before = dir_size(&res.case_dir);
+    let trimmed = trim_case(&res.case_dir);
+    let case_bytes = dir_size(&res.case_dir);
+    ctx.log(&format!(
+        "OpenFOAM case trimmed for ParaView: {:.0} MB → {:.0} MB (removed {})",
+        before as f64 / 1e6,
+        case_bytes as f64 / 1e6,
+        if trimmed.is_empty() { "nothing".into() } else { trimmed.join(", ") }
+    ));
 
     let (fields, slices) = write_pressure_and_slices(
         ctx,
@@ -207,14 +208,20 @@ fn openfoam(ctx: &Ctx, r: &RunRow, cfg: &WindConfig, surf_m: &TriMesh, spin: boo
         "warnings": warnings,
         "accuracy": accuracy("reference", spin),
         "case_dir": res.case_dir,
+        "case_bytes": case_bytes,
+        "case_bytes_untrimmed": before,
     });
     Ok(Outcome { summary, fields: json!(fields), slices: json!(slices) })
 }
 
 fn gpu(ctx: &Ctx, cfg: &WindConfig, surf_m: &TriMesh, spin: bool, mut warnings: Vec<String>) -> Result<Outcome> {
+    let plan = preview_plan(ctx.app, cfg, surf_m)?;
+    ctx.log(&format!(
+        "quick preview: {} cells across (the quality asks {}), {} cells, about {:.0} s; the accurate run would take about {:.0} s",
+        plan.used, plan.asked, plan.est.cells, plan.seconds, plan.accurate_s.unwrap_or(f64::NAN)
+    ));
     ctx.phase("running", 0.0, 0.98);
-    let opt = simlab_cfd::SolverOptions { memory_budget: Some(ctx.app.settings().budget_bytes()), ..Default::default() };
-    let res = simlab_cfd::run_with(cfg, surf_m, 0.001, &opt, ctx)?;
+    let res = simlab_cfd::run_with(cfg, surf_m, 0.001, &plan.opt, ctx)?;
     ctx.phase("running", 0.98, 1.0);
     ctx.report(0.0, "Saving the results");
     let (fields, slices) = write_pressure_and_slices(
@@ -239,7 +246,7 @@ fn gpu(ctx: &Ctx, cfg: &WindConfig, surf_m: &TriMesh, spin: bool, mut warnings: 
     let r = &res.summary;
     let headline = match (r.thrust_n, r.torque_nm, r.power_w) {
         (Some(t), Some(q), Some(p)) if spin => format!(
-            "Rough preview: about {} g of thrust at {} rpm, {} W, torque {} mN·m. Thrust can be 30–60% off.",
+            "Rough preview: about {} g of thrust at {} rpm, {} W, torque {} mN·m. Not a number to use: thrust can be 30–90% off.",
             sig(t.abs() / G * 1e3),
             crate::solve::group(cfg.spin.map(|s| s.rpm.abs()).unwrap_or(0.0).round() as usize),
             sig(p.abs()),
@@ -265,10 +272,93 @@ fn gpu(ctx: &Ctx, cfg: &WindConfig, surf_m: &TriMesh, spin: bool, mut warnings: 
     summary["engine"] = json!("native");
     summary["method"] = json!("Quick preview (GPU)");
     warnings.insert(0, note.to_string());
+    if let Some(w) = plan.capped_note() {
+        warnings.insert(1, w);
+    }
     warnings.extend(res.summary.warnings.iter().cloned());
+    summary["preview_cells_across"] = json!(plan.used);
+    summary["quality_cells_across"] = json!(plan.asked);
     summary["warnings"] = json!(warnings);
     summary["accuracy"] = accuracy("native", spin);
     Ok(Outcome { summary, fields: json!(fields), slices: json!(slices) })
+}
+
+/// Bytes in a folder and everything under it.
+pub fn dir_size(p: &std::path::Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(p) else { return 0 };
+    rd.flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => dir_size(&e.path()),
+            Ok(_) => e.metadata().map(|m| m.len()).unwrap_or(0),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+/// Leaves a finished OpenFOAM case with what ParaView (and a re-run of
+/// `Allrun`) needs: the reconstructed mesh (constant/), the final time step,
+/// system/, 0.orig/, Allrun, case.json, the logs and the force and y+
+/// histories (postProcessing/). Removed: the split-up processor*/ copies,
+/// every earlier time step (0/ too; Allrun makes it again from 0.orig/),
+/// the final face fluxes (phi: only a solver restart reads them) and the
+/// raw samples (postProcessing/probes, partSurface: already read into the
+/// run's results). The mesh's topology files are gzipped (OpenFOAM and
+/// ParaView read `faces.gz` as `faces`); on E-v5 at Normal that takes
+/// faces from 115 to 39 MB and owner/neighbour from 22 to 4 MB each.
+/// Adds an empty `case.foam` so ParaView opens the case directly. Returns
+/// what it removed or packed.
+pub fn trim_case(case: &std::path::Path) -> Vec<String> {
+    let mut times: Vec<(f64, std::path::PathBuf, String)> = vec![];
+    let mut removed = vec![];
+    if let Ok(rd) = std::fs::read_dir(case) {
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !e.path().is_dir() {
+                continue;
+            }
+            if name.starts_with("processor") {
+                if std::fs::remove_dir_all(e.path()).is_ok() {
+                    removed.push(name);
+                }
+            } else if let Ok(t) = name.parse::<f64>() {
+                times.push((t, e.path(), name));
+            }
+        }
+    }
+    times.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let times_last = times.last().cloned();
+    if let Some((t_last, _, _)) = times.last().cloned() {
+        for (t, path, name) in times {
+            if t < t_last && std::fs::remove_dir_all(&path).is_ok() {
+                removed.push(format!("{name}/"));
+            }
+        }
+    }
+    if let Some((_, last, name)) = times_last
+        && std::fs::remove_file(last.join("phi")).is_ok()
+    {
+        removed.push(format!("{name}/phi"));
+    }
+    if let Ok(rd) = std::fs::read_dir(case.join("postProcessing")) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            // the samples SimLab already read; forces and yPlus histories stay
+            if matches!(n.as_str(), "probes" | "partSurface") && std::fs::remove_dir_all(e.path()).is_ok() {
+                removed.push(format!("postProcessing/{n}"));
+            }
+        }
+    }
+    let mesh = case.join("constant/polyMesh");
+    let packed: Vec<std::path::PathBuf> = ["faces", "owner", "neighbour", "points"].iter().map(|f| mesh.join(f)).filter(|p| p.is_file()).collect();
+    if !packed.is_empty() {
+        let ok = std::process::Command::new("/usr/bin/gzip").arg("-1").arg("-f").args(&packed).status().map(|s| s.success()).unwrap_or(false);
+        if ok {
+            removed.push("gzipped constant/polyMesh/{faces,owner,neighbour,points}".into());
+        }
+    }
+    let _ = std::fs::write(case.join("case.foam"), b"");
+    removed.sort();
+    removed
 }
 
 /// A number with three significant digits, the way people read them:
@@ -367,15 +457,83 @@ fn unavailable(why: &str) -> Value {
 }
 
 fn gpu_estimate(app: &App, surf_m: &TriMesh, cfg: &WindConfig) -> Result<Value> {
-    let budget = app.settings().budget_bytes();
-    let e = simlab_cfd::estimate(cfg, surf_m, 0.001, budget)?;
+    let p = preview_plan(app, cfg, surf_m)?;
+    let e = &p.est;
+    let mut note = if e.fits { format!("About {} air cells on the graphics chip", crate::solve::group(e.cells as usize)) } else { e.note.clone() };
+    if let Some(w) = p.capped_note() {
+        note = format!("{note}. {w}");
+    }
     Ok(json!({
         "engine": "native", "label": "Quick preview (GPU)",
         "fits": e.fits, "memory_bytes": e.memory_bytes, "budget_bytes": e.budget_bytes,
-        "size": {"cells": e.cells}, "seconds": e.seconds,
-        "note": if e.fits { format!("About {} air cells on the graphics chip", crate::solve::group(e.cells as usize)) } else { e.note },
-        "available": true,
+        "size": {"cells": e.cells}, "seconds": p.seconds,
+        "note": note, "available": true,
+        "cells_across": p.used, "quality_cells_across": p.asked,
     }))
+}
+
+/// The GPU tunnel's own time estimate against measured runs on an M4 Max
+/// (November 2026): spinning E-v5 at Draft, 82 s estimated → 188 s; a still
+/// sphere at Draft, 134 s → 181 s.
+const GPU_SLOWER_SPIN: f64 = 2.3;
+const GPU_SLOWER_STILL: f64 = 1.35;
+/// A preview never plans to take longer than this, nor more than half the
+/// accurate run's time: otherwise it is not a preview.
+const PREVIEW_MAX_S: f64 = 180.0;
+/// Below this many cells across the part a picture says nothing.
+const PREVIEW_MIN_CELLS: u32 = 32;
+
+pub struct PreviewPlan {
+    pub opt: simlab_cfd::SolverOptions,
+    pub est: simlab_cfd::Estimate,
+    /// expected run time (s), the tunnel's estimate corrected by the measured runs
+    pub seconds: f64,
+    /// cells across the part the quality asks for, and what the preview uses
+    pub asked: u32,
+    pub used: u32,
+    pub accurate_s: Option<f64>,
+}
+
+impl PreviewPlan {
+    fn capped_note(&self) -> Option<String> {
+        (self.used < self.asked).then(|| {
+            format!(
+                "To stay quick (about {}), this preview uses {} grid cells across the part instead of the {} its detail setting asks for, so it is rougher still.",
+                human_time(self.seconds),
+                self.used,
+                self.asked
+            )
+        })
+    }
+}
+
+fn human_time(s: f64) -> String {
+    if s < 90.0 { format!("{:.0} s", s.max(1.0)) } else { format!("{:.0} min", s / 60.0) }
+}
+
+/// How fine a quick preview can be and still be one: the finest grid (up to
+/// what the quality asks) whose expected time is under 3 minutes and under
+/// half the accurate run's. Run time grows about as the 4th power of the
+/// cells across (cells³ × time steps), so a few tries get there. A custom
+/// grid size is the caller's explicit choice and is kept.
+pub fn preview_plan(app: &App, cfg: &WindConfig, surf_m: &TriMesh) -> Result<PreviewPlan> {
+    let budget = app.settings().budget_bytes();
+    let slower = if spinning(cfg) { GPU_SLOWER_SPIN } else { GPU_SLOWER_STILL };
+    let accurate_s = openfoam_estimate(app, surf_m, cfg).ok().and_then(|v| v["seconds"].as_f64());
+    let target = accurate_s.map(|a| 0.5 * a).unwrap_or(PREVIEW_MAX_S).clamp(30.0, PREVIEW_MAX_S);
+    let asked = simlab_cfd::cells_across(&cfg.quality);
+    let custom = matches!(cfg.quality, GridQuality::Custom { .. });
+    let mut n = asked;
+    loop {
+        let opt = simlab_cfd::SolverOptions { cells_across: Some(n), memory_budget: Some(budget), ..Default::default() };
+        let est = simlab_cfd::estimate_with(cfg, surf_m, 0.001, budget, &opt)?;
+        let seconds = est.seconds * slower;
+        if custom || (seconds <= target && est.fits) || n <= PREVIEW_MIN_CELLS {
+            return Ok(PreviewPlan { opt, est, seconds, asked, used: n, accurate_s });
+        }
+        let k = (target / seconds).powf(0.25).min(1.0);
+        n = ((n as f64 * k).floor() as u32).min(n.saturating_sub(2)).max(PREVIEW_MIN_CELLS);
+    }
 }
 
 /// OpenFOAM's time and memory, calibrated on validation runs (OpenFOAM
@@ -477,5 +635,24 @@ mod tests {
         fill_spin_center(&m2, &mut c);
         assert_eq!(c["spin"]["center_mm"], json!([5.0, 10.0, 15.0]));
         assert_eq!(c["spin"]["axis"], json!([0, 0, 1]));
+    }
+
+    #[test]
+    fn trimmed_case_keeps_what_paraview_needs() {
+        let d = std::env::temp_dir().join(format!("simlab-trim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for sub in ["0", "0.orig", "500", "774", "processor0/774", "constant/polyMesh", "system", "postProcessing/forces/0", "postProcessing/probes/0"] {
+            std::fs::create_dir_all(d.join(sub)).unwrap();
+        }
+        for f in ["774/U", "774/phi", "500/U", "0/U", "processor0/774/U", "constant/polyMesh/points", "constant/polyMesh/faces", "system/controlDict", "Allrun", "case.json", "log.solve"] {
+            std::fs::write(d.join(f), b"x").unwrap();
+        }
+        let removed = trim_case(&d);
+        assert_eq!(removed, vec!["0/", "500/", "774/phi", "gzipped constant/polyMesh/{faces,owner,neighbour,points}", "postProcessing/probes", "processor0"]);
+        for kept in ["774/U", "0.orig", "constant/polyMesh/points.gz", "constant/polyMesh/faces.gz", "system/controlDict", "Allrun", "case.json", "log.solve", "postProcessing/forces/0", "case.foam"] {
+            assert!(d.join(kept).exists(), "{kept} should stay");
+        }
+        assert!(!d.join("constant/polyMesh/faces").exists());
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

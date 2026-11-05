@@ -167,7 +167,7 @@ function solve(rec: RunRec) {
     const { fields, summary: base, slices } = wind(mesh, mrec.model, cfg);
     const spin = !!(cfg.spin && cfg.spin.rpm > 0);
     const preview = rec.run.engine === "native";
-    const note = spin ? "Rough picture only: thrust can be 30–60% off, use Accurate for numbers." : "Drag within about 3% on simple shapes at low Reynolds number, less certain above.";
+    const note = spin ? "Rough picture only: thrust can be 30–90% off (quick previews of a 3-inch prop read 32–50 g where OpenFOAM gets 345 g); use Accurate for numbers." : "Drag within about 3% on simple shapes at low Reynolds number, less certain above.";
     // the preview reads differently from the accurate answer, as the real GPU tunnel does on propellers
     const k = preview && spin ? 0.62 : 1;
     const summary: WindSummary = preview
@@ -177,6 +177,8 @@ function solve(rec: RunRec) {
           headline: `${spin ? "Rough preview:" : "Quick preview:"} ${base.headline}`,
           engine: "native",
           method: "Quick preview (GPU)",
+          preview_cells_across: 57,
+          quality_cells_across: { draft: 64, normal: 128, fine: 192, custom: 128 }[cfg.quality.type],
           preview_note: note,
           warnings: [note, ...base.warnings],
           accuracy: { method: "SimLab's GPU wind tunnel: lattice Boltzmann (D3Q19, LES)", checked_against: spin ? "OpenFOAM runs of two 3-inch props" : "Sphere drag from Reynolds number 20 to 10,000", typical_error: note },
@@ -191,6 +193,8 @@ function solve(rec: RunRec) {
           cells: Math.round(base.cells / 4.3),
           turbulence: "k-omega SST",
           seconds: spin ? 560 : 420,
+          case_dir: `~/Library/Application Support/SimLab/runs/${rec.run.id}/openfoam`,
+          case_bytes: spin ? 253_000_000 : 180_000_000,
           accuracy: {
             method: "OpenFOAM v2606: snappyHexMesh, steady RANS with k-ω SST, the spin as a moving reference frame",
             checked_against: spin ? "Your 2026 OpenFOAM propeller study (E-v5, P-v2)" : "Sphere drag at Reynolds number 100 and 1000",

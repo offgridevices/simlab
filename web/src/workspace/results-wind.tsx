@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { useApp } from "../lib/app";
 import { useAsync, useField } from "../lib/hooks";
 import { colorize, scaleFor, type ColorScale } from "../lib/colormaps";
-import { duration, engineLabel, G, n } from "../lib/format";
+import { bytes, duration, engineLabel, G, n } from "../lib/format";
 import type { Run, Slice, WindSummary } from "../lib/types";
 import { Details, Row, Stat } from "../components/section";
 import { HowSure, Segmented } from "./common";
@@ -74,7 +74,7 @@ export function WindResults({ run, summary: s, again }: { run: Run; summary: Win
           <span className="flex flex-col gap-2">
             <span>
               <span className="font-semibold">Quick preview, not the answer. </span>
-              {s.preview_note ?? (spin ? "Rough picture only: thrust can be 30–60% off, use Accurate for numbers." : "Drag within about 3% on simple shapes at low Reynolds number, less certain above.")}
+              {s.preview_note ?? (spin ? "Rough picture only: thrust can be 30–90% off (quick previews of a 3-inch prop read 32–50 g where OpenFOAM gets 345 g); use Accurate for numbers." : "Drag within about 3% on simple shapes at low Reynolds number, less certain above.")}
             </span>
             {again && (
               <Button size="sm" variant="outline" className="self-start" onClick={() => again.rerun("reference")} disabled={again.starting} data-testid="run-accurate">
@@ -184,6 +184,17 @@ export function WindResults({ run, summary: s, again }: { run: Run; summary: Win
         <Row label="Took">{duration(s.seconds)}</Row>
         <Row label="Settled">{s.converged ? "Yes" : "Not fully: treat the numbers as rough"}</Row>
         <Row label="Solved by">{engineLabel("wind", s.engine ?? run.engine)}</Row>
+        {s.preview_cells_across ? <Row label="Grid cells across the part">{n(s.preview_cells_across)}</Row> : null}
+        {s.case_dir ? (
+          <Row label="OpenFOAM case (open case.foam in ParaView)">
+            <span className="flex flex-col items-end gap-0.5">
+              <span className="num">{s.case_bytes ? bytes(s.case_bytes) : "–"}</span>
+              <span className="num break-all text-2xs text-muted-foreground" data-testid="case-dir">
+                {s.case_dir}
+              </span>
+            </span>
+          </Row>
+        ) : null}
       </Details>
     </div>
   );

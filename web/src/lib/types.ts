@@ -361,6 +361,12 @@ export interface WindSummary {
   turbulence?: string | null;
   /** y+ on the part: min, average, max */
   y_plus?: [number, number, number] | null;
+  /** OpenFOAM: the case kept for ParaView (open case.foam in it), and its size on disk */
+  case_dir?: string | null;
+  case_bytes?: number | null;
+  /** quick previews: grid cells across the part used, and what the detail setting asked for */
+  preview_cells_across?: number | null;
+  quality_cells_across?: number | null;
 }
 export interface PropPoint {
   rpm: number;

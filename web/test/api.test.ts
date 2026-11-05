@@ -148,8 +148,8 @@ describe("demo engine, through the real client", () => {
     expect(a.summary.engine).toBe("reference");
     expect(a.summary.preview_note ?? null).toBeNull();
     expect(q.summary.headline).toMatch(/^Rough preview:/);
-    expect(q.summary.preview_note).toMatch(/30–60% off/);
+    expect(q.summary.preview_note).toMatch(/30–90% off/);
     expect(q.summary.warnings[0]).toBe(q.summary.preview_note);
-    expect(q.summary.accuracy?.typical_error).toMatch(/30–60% off/);
+    expect(q.summary.accuracy?.typical_error).toMatch(/30–90% off/);
   });
 });

@@ -88,9 +88,20 @@ MountGuess = { center_mm, axis, bolt_circle_mm, patches: number[] }   // a motor
 
 | test | `"reference"` | `"native"` |
 |---|---|---|
-| wind tunnel | **Accurate (OpenFOAM)**, the default: OpenFOAM v2606 in Docker (snappyHexMesh, steady RANS k-ω SST, MRF for spinning parts) on the CPU queue with `cpu_threads` cores. Propeller thrust within ~3 %, torque ~7 %; sphere drag 0.2–1.3 %. ~4 / 10 / 26 min for a 3-inch prop at Draft / Normal / Fine. | **Quick preview (GPU)**: the lattice-Boltzmann tunnel. Still parts: drag within ~3 % on simple shapes at low Reynolds number, less certain above; spinning parts: a rough picture only, thrust can be 30–60 % off. Every preview's headline, `preview_note`, first warning and `accuracy` say so. |
+| wind tunnel | **Accurate (OpenFOAM)**, the default: OpenFOAM v2606 in Docker (snappyHexMesh, steady RANS k-ω SST, MRF for spinning parts) on the CPU queue with `cpu_threads` cores. Propeller thrust within ~3 %, torque ~7 %; sphere drag 0.2–1.3 %. ~4 / 10 / 26 min for a 3-inch prop at Draft / Normal / Fine. | **Quick preview (GPU)**: the lattice-Boltzmann tunnel. Still parts: drag within ~3 % on simple shapes at low Reynolds number, less certain above; spinning parts: a rough picture only, thrust can be 30–90 % off (E-v5 previews read 32–50 g against OpenFOAM's 345 g). Every preview's headline, `preview_note`, first warning and `accuracy` say so. |
 | strength | **CalculiX check**: the same mesh, loads and supports solved by CalculiX 2.21 in Docker (geometrically nonlinear when a held part spins); the summary's `check` compares it with the latest SimLab run of the same setup. | SimLab's own solver, the default. |
 | propeller | – | blade element model, the only engine |
+
+A quick preview is always a preview: the engine picks the finest GPU grid
+(up to what the quality asks) whose expected time is under 3 minutes and
+under half the accurate run's, and says so in a warning when it had to go
+coarser (`preview_cells_across` vs `quality_cells_across`). A custom grid
+size (`{type: "custom", cells_across}`) is kept as given.
+
+An accurate run keeps its OpenFOAM case for ParaView (`case_dir`, open
+`case.foam`; `case_bytes` on disk), trimmed to the reconstructed mesh, the
+final time step, the dictionaries, `Allrun`, `case.json`, the logs and
+`postProcessing/`. Deleting the run deletes it.
 
 A spinning wind config may leave out `spin.center_mm`: the engine then uses
 the hub the model analysis found (`suggestions.prop.center_mm`), not the
@@ -152,7 +163,9 @@ WindSummary = { kind: "wind", engine: "reference"|"native", method: "Accurate (O
   reynolds, cells, steps, seconds, converged, warnings, accuracy,
   preview_note?,                                  // quick previews: how rough, in one sentence
   mlups?,                                         // GPU
-  iterations?, averaged_over?, turbulence?, y_plus?: [min, avg, max], moment_center_mm?, case_dir? }   // OpenFOAM
+  preview_cells_across?, quality_cells_across?,   // GPU
+  iterations?, averaged_over?, turbulence?, y_plus?: [min, avg, max], moment_center_mm?,
+  case_dir?, case_bytes? }                        // OpenFOAM
 Accuracy = { method, checked_against, typical_error }   // "How sure" in the UI
 PropSummary = { kind: "prop", headline, blades, radius_mm, hub_radius_mm, rotation: "cw"|"ccw",
   geometry: { r_mm, chord_mm, pitch_deg }[],

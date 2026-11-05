@@ -46,7 +46,7 @@ export const WIND_ENGINES: { id: Engine; label: string; icon: React.ReactNode; d
     id: "native",
     label: "Quick preview",
     icon: <ZapIcon />,
-    detail: "On the graphics chip, for a first look at the flow. Drag within about 3% on simple shapes; a spinning part's thrust can be 30–60% off, far more at Draft.",
+    detail: "On the graphics chip, for a first look at the flow. Drag within about 3% on simple shapes; a spinning part's thrust can be 30–90% off.",
   },
 ];
 
