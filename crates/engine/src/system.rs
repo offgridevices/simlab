@@ -147,7 +147,10 @@ pub fn run_checks(app: &App) -> Vec<Check> {
             if colima.is_some() { "Installed (Colima) but not running. SimLab starts it only for a reference run." } else { "Installed but not running." },
             colima.map(|_| Fix {
                 label: "Start Colima".into(),
-                asks: "Start Colima now? It runs a small Linux machine using 8 GB of memory and 8 CPU cores until you stop it or quit SimLab.".into(),
+                asks: {
+                    let (cpu, mem) = colima_profile().unwrap_or((COLIMA_NEW_CPU, COLIMA_NEW_MEMORY_GB));
+                    format!("Start Colima now? It runs a small Linux machine using up to {mem} GB of memory and {cpu} CPU cores (your Colima settings) until you stop it or quit SimLab.")
+                },
             }),
         ));
     } else if !reference_image_present() {
@@ -202,6 +205,23 @@ fn set_working(app: &Arc<App>, id: &str, detail: &str) {
     }
 }
 
+/// Sizes for a brand-new Colima (only when none exists yet).
+const COLIMA_NEW_CPU: u32 = 8;
+const COLIMA_NEW_MEMORY_GB: u32 = 8;
+
+/// CPU cores and memory (GB) of the existing default Colima, if there is one.
+fn colima_profile() -> Option<(u32, u32)> {
+    let home = std::env::var("HOME").ok()?;
+    let text = std::fs::read_to_string(format!("{home}/.colima/default/colima.yaml")).ok()?;
+    let field = |k: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(k))
+            .and_then(|v| v.trim().parse::<f64>().ok())
+            .map(|v| v.round() as u32)
+    };
+    Some((field("cpu:")?, field("memory:")?))
+}
+
 /// Runs a fix the user agreed to. Blocking; call from spawn_blocking.
 pub fn fix(app: &Arc<App>, id: &str) -> anyhow::Result<()> {
     let result = match id {
@@ -212,7 +232,14 @@ pub fn fix(app: &Arc<App>, id: &str) -> anyhow::Result<()> {
         "docker" if !docker_running() => {
             set_working(app, id, "Starting Colima…");
             let colima = find_program("colima").ok_or_else(|| anyhow::anyhow!("Colima is not installed"))?;
-            run_ok(Command::new(colima).args(["start", "--cpu", "8", "--memory", "8", "--vm-type", "vz"]))
+            // An existing Colima keeps its own CPU and memory settings: passing
+            // --cpu/--memory would overwrite them for everything else you run.
+            let mut cmd = Command::new(colima);
+            cmd.arg("start");
+            if colima_profile().is_none() {
+                cmd.args(["--cpu", &COLIMA_NEW_CPU.to_string(), "--memory", &COLIMA_NEW_MEMORY_GB.to_string(), "--vm-type", "vz"]);
+            }
+            run_ok(&mut cmd)
         }
         "docker" => {
             set_working(app, id, "Building the reference image (a few minutes)…");
