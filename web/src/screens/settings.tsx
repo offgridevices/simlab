@@ -80,7 +80,7 @@ export default function Settings() {
         <div className="flex flex-col gap-1">
           <h1 className="text-3xl font-semibold tracking-tight">Settings</h1>
           <p className="text-muted-foreground">
-            {health ? [health.machine.cpu, `${ramGb} GB memory`, health.machine.gpu, `SimLab ${health.version}`].filter(Boolean).join(" · ") : "Reading this Mac…"}
+            {health ? [health.machine.cpu, `${ramGb} GB memory`, gpuWithoutChip(health.machine.gpu, health.machine.cpu), `SimLab ${health.version}`].filter(Boolean).join(" · ") : "Reading this Mac…"}
           </p>
         </div>
 
@@ -507,4 +507,10 @@ function MotorsEditor() {
       )}
     </Block>
   );
+}
+
+/** "Apple M4 Max · Metal · 4.3 GB" next to the chip name already shown reads "Metal · 4.3 GB" */
+function gpuWithoutChip(gpu: string | null | undefined, cpu: string | null | undefined): string | null | undefined {
+  if (!gpu || !cpu || !gpu.startsWith(cpu)) return gpu;
+  return gpu.slice(cpu.length).replace(/^\s*·\s*/, "") || undefined;
 }
