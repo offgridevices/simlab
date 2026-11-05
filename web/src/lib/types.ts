@@ -79,6 +79,8 @@ export interface RunBrief {
   created_at: string;
   finished_at?: string | null;
   headline?: string | null;
+  /** a short label for pills, when the engine has one */
+  short?: string | null;
   /** strength runs: the verdict in one word */
   verdict?: "safe" | "marginal" | "breaks" | null;
 }

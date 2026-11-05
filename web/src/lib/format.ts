@@ -60,13 +60,15 @@ export const STATUS_TONE: Record<RunStatus, Tone> = { queued: "neutral", running
  * Built from the run's one-sentence headline, since a run brief carries
  * nothing else about the result.
  */
-export function pillFor(r: (Pick<RunBrief, "status" | "headline" | "progress"> & { verdict?: RunBrief["verdict"] }) | null | undefined): { tone: Tone; text: string } | null {
+export function pillFor(r: (Pick<RunBrief, "status" | "headline" | "progress"> & { verdict?: RunBrief["verdict"]; short?: string | null }) | null | undefined): { tone: Tone; text: string } | null {
   if (!r) return null;
   if (r.status === "queued") return { tone: "neutral", text: "Waiting" };
   if (r.status === "running") return { tone: "ember", text: `Running ${Math.round((r.progress || 0) * 100)}%` };
   if (r.status === "failed") return { tone: "clay", text: "Failed" };
   if (r.status === "stopped") return { tone: "neutral", text: "Stopped" };
   const h = (r.headline ?? "").trim();
+  // the engine's own short label wins (e.g. "392 g at 45,800 rpm")
+  if (r.short && !r.verdict) return { tone: "sky", text: r.short };
   if (!h) return { tone: "moss", text: "Done" };
   const times = /(\d+(?:\.\d+)?)\s*×/.exec(h)?.[1];
   // the engine's own verdict wins over reading the sentence

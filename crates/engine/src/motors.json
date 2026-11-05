@@ -1,0 +1,10 @@
+[
+  {"id": "1404-4600kv", "name": "1404 4600KV (3-inch, 4S)", "kv": 4600, "mass_g": 9.5, "max_thrust_g": 420, "max_current_a": 14, "voltage_v": 16.8, "prop": "3 inch 3-blade", "mount_mm": 9, "notes": "Typical 3-inch cinewhoop/freestyle class; thrust from maker bench tables at full throttle"},
+  {"id": "1404-3800kv", "name": "1404 3800KV (3-inch, 4S)", "kv": 3800, "mass_g": 9.6, "max_thrust_g": 380, "max_current_a": 12, "voltage_v": 16.8, "prop": "3 inch 3-blade", "mount_mm": 9, "notes": "Typical values"},
+  {"id": "1804-2450kv", "name": "1804 2450KV (4-inch, 4S)", "kv": 2450, "mass_g": 17, "max_thrust_g": 620, "max_current_a": 16, "voltage_v": 16.8, "prop": "4 inch 3-blade", "mount_mm": 12, "notes": "Typical values"},
+  {"id": "2004-1700kv", "name": "2004 1700KV (5-inch, 6S)", "kv": 1700, "mass_g": 25, "max_thrust_g": 1050, "max_current_a": 25, "voltage_v": 25.2, "prop": "5 inch 3-blade", "mount_mm": 12, "notes": "Typical long-range/light freestyle values"},
+  {"id": "2207-1950kv", "name": "2207 1950KV (5-inch, 6S)", "kv": 1950, "mass_g": 32, "max_thrust_g": 1700, "max_current_a": 45, "voltage_v": 25.2, "prop": "5 inch 3-blade (5x4.3x3)", "mount_mm": 16, "notes": "Typical 5-inch freestyle; full-throttle bench thrust"},
+  {"id": "2207-2750kv", "name": "2207 2750KV (5-inch, 4S)", "kv": 2750, "mass_g": 32, "max_thrust_g": 1600, "max_current_a": 44, "voltage_v": 16.8, "prop": "5 inch 3-blade", "mount_mm": 16, "notes": "Typical values"},
+  {"id": "2806.5-1300kv", "name": "2806.5 1300KV (7-inch, 6S)", "kv": 1300, "mass_g": 50, "max_thrust_g": 2300, "max_current_a": 45, "voltage_v": 25.2, "prop": "7 inch 2-blade", "mount_mm": 16, "notes": "Typical long-range values"},
+  {"id": "0802-19000kv", "name": "0802 19000KV (tiny whoop, 1S)", "kv": 19000, "mass_g": 2.0, "max_thrust_g": 40, "max_current_a": 3.5, "voltage_v": 4.2, "prop": "31 mm 4-blade", "mount_mm": 6.6, "notes": "Typical values"}
+]
