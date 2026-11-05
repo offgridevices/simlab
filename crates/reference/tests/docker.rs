@@ -97,3 +97,45 @@ fn cancel_kills_the_container() {
     assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty(), "a container is still running");
     eprintln!("cancelled after {:.0} s", t.elapsed().as_secs_f64());
 }
+
+/// Sphere at Re 10,000, Draft: the transition model (kOmegaSSTLM) on the
+/// Draft mesh with its prism layers. Measured 0.408 (Clift 0.405); the
+/// Normal mesh reads 0.374, see the crate docs.
+#[test]
+#[ignore]
+fn sphere_re1e4_transition_model() {
+    let d = 0.02;
+    let air = Air::default();
+    let u = 1.0e4 * air.kinematic_viscosity / d;
+    let cfg = WindConfig { wind_dir: [1.0, 0.0, 0.0], speed_m_s: u, air, spin: None, quality: GridQuality::Draft, duration: None };
+    let s = icosphere([0.0; 3], d / 2.0, 5);
+    let r = run_openfoam(&s, &cfg, 0.001, &case("sphere-re1e4"), threads(), &Quiet).unwrap();
+    let cd = r.cd.unwrap();
+    eprintln!("Cd {cd:.4} vs 0.405, {} cells, {:.0} s", r.cells, r.seconds);
+    assert_eq!(r.turbulence, "k-omega SST with Langtry-Menter transition");
+    assert_eq!(r.solver, "steady (simpleFoam)");
+    assert!((cd - 0.405).abs() / 0.405 < 0.04, "Cd {cd}");
+}
+
+/// A run length asked for gives a time-accurate run that finishes, averages
+/// its second part and samples the mean fields.
+#[test]
+#[ignore]
+fn time_accurate_run_averages_the_forces() {
+    let d = 0.02;
+    let air = Air::default();
+    let u = 2.0e4 * air.kinematic_viscosity / d;
+    let cfg = WindConfig { wind_dir: [1.0, 0.0, 0.0], speed_m_s: u, air, spin: None, quality: GridQuality::Draft, duration: Some(12.0) };
+    let s = icosphere([0.0; 3], d / 2.0, 5);
+    let r = run_openfoam(&s, &cfg, 0.001, &case("sphere-transient"), threads(), &Quiet).unwrap();
+    let cd = r.cd.unwrap();
+    eprintln!("Cd {cd:.4}, {} steps, averaged over {:?} flow passes, {:.0} s", r.iterations, r.averaged_flow_passes, r.seconds);
+    assert!(r.solver.starts_with("time-accurate"));
+    let a = r.averaged_flow_passes.unwrap();
+    assert!((5.0..=6.5).contains(&a), "{a}");
+    assert!(r.drag_fluctuation.unwrap() >= 0.0);
+    // unsteady RANS of a sphere settles near the steady answer (0.40 at Draft)
+    assert!((cd - 0.40).abs() < 0.03, "Cd {cd}");
+    assert!(r.surface_pressure.iter().filter(|p| p.is_finite()).count() > r.surface_pressure.len() / 2);
+    assert_eq!(r.slices.len(), 2);
+}

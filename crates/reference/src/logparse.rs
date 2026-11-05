@@ -8,9 +8,11 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     Stage(String),
-    /// one solver iteration finished: iteration, total force (N), total
+    /// one solver iteration (steady) or time step (transient) finished:
+    /// its number in this stage (1, 2, …), the solver's time (iteration
+    /// count for simpleFoam, seconds for pimpleFoam), total force (N), total
     /// moment (N·m) about CofR, initial residuals
-    Iteration { it: u32, force: Vec3, moment: Vec3, residuals: BTreeMap<String, f64> },
+    Iteration { it: u32, time: f64, force: Vec3, moment: Vec3, residuals: BTreeMap<String, f64> },
     /// snappyHexMesh's own progress, in words
     Meshing(String),
 }
@@ -18,7 +20,12 @@ pub enum Event {
 #[derive(Default, Debug)]
 pub struct LogState {
     pub stage: String,
+    /// iterations (steady) or time steps (transient) so far in this stage
     pub iteration: u32,
+    /// the solver's time: iteration number (simpleFoam) or seconds (pimpleFoam)
+    pub time: f64,
+    /// largest Courant number of the latest time step (transient only)
+    pub courant_max: Option<f64>,
     pub residuals: BTreeMap<String, f64>,
     in_forces: bool,
     in_moments: bool,
@@ -55,6 +62,7 @@ impl LogState {
         }
         if let Some(name) = t.strip_prefix("@@SIMLAB stage ") {
             self.stage = name.trim().to_string();
+            self.iteration = 0;
             ev.push(Event::Stage(self.stage.clone()));
             return ev;
         }
@@ -75,7 +83,8 @@ impl LogState {
                 }
         }
         match self.stage.as_str() {
-            "solve" => self.solver_line(t, &mut ev),
+            // "init": the steady start of a transient run
+            "solve" | "init" => self.solver_line(t, &mut ev),
             "snappy" => {
                 let words = [
                     "Surface refinement iteration",
@@ -121,8 +130,9 @@ impl LogState {
 
     fn solver_line(&mut self, t: &str, ev: &mut Vec<Event>) {
         if let Some(rest) = t.strip_prefix("Time = ") {
-            if let Ok(it) = rest.trim().parse::<f64>() {
-                self.iteration = it as u32;
+            if let Ok(time) = rest.trim().trim_end_matches('s').trim().parse::<f64>() {
+                self.time = time;
+                self.iteration += 1;
                 self.residuals.clear();
                 self.in_forces = false;
                 self.in_moments = false;
@@ -159,9 +169,13 @@ impl LogState {
             } else if self.in_moments {
                 self.in_moments = false;
                 if let (Some(f), Some(m)) = (self.force.take(), vec3(t)) {
-                    ev.push(Event::Iteration { it: self.iteration, force: f, moment: m, residuals: self.residuals.clone() });
+                    ev.push(Event::Iteration { it: self.iteration, time: self.time, force: f, moment: m, residuals: self.residuals.clone() });
                 }
             }
+            return;
+        }
+        if let Some(rest) = t.strip_prefix("Courant Number mean:") {
+            self.courant_max = rest.split("max:").nth(1).and_then(|x| x.trim().parse().ok());
             return;
         }
         if t.starts_with("SIMPLE solution converged") {
@@ -209,8 +223,9 @@ yPlus yPlus write:
         let ev: Vec<Event> = log.lines().flat_map(|l| s.feed(l)).collect();
         assert_eq!(ev[0], Event::Stage("solve".into()));
         match &ev[1] {
-            Event::Iteration { it, force, moment, residuals } => {
-                assert_eq!(*it, 2500);
+            Event::Iteration { it, time, force, moment, residuals } => {
+                assert_eq!(*it, 1);
+                assert_eq!(*time, 2500.0);
                 assert_eq!(force[2], 0.44896341);
                 assert_eq!(moment[2], -0.0031216408);
                 assert_eq!(residuals["p"], 3.3873241e-07);
@@ -238,5 +253,53 @@ yPlus yPlus write:
             s.feed(l);
         }
         assert!(s.fatal.as_ref().unwrap().contains("Cannot find patchField entry for sideA"));
+    }
+
+    #[test]
+    fn parses_pimplefoam_time_steps() {
+        let log = "@@SIMLAB stage init
+Time = 1
+
+    Sum of forces
+        Total    : (1 0 0)
+    Sum of moments
+        Total    : (0 0 0)
+@@SIMLAB stage solve
+Courant Number mean: 0.137 max: 0.98
+deltaT = 6.25e-06
+Time = 1.25e-05
+
+PIMPLE: iteration 1
+GAMG:  Solving for p, Initial residual = 0.01, Final residual = 1e-4, No Iterations 3
+PIMPLE: iteration 2
+GAMG:  Solving for p, Initial residual = 0.001, Final residual = 1e-5, No Iterations 3
+    Sum of forces
+        Total    : (0.0154 0 1e-5)
+    Sum of moments
+        Total    : (0 0 0)
+Courant Number mean: 0.137 max: 1.01
+Time = 1.875e-05
+    Sum of forces
+        Total    : (0.0155 0 2e-5)
+    Sum of moments
+        Total    : (0 0 0)
+";
+        let mut s = LogState::default();
+        let ev: Vec<Event> = log.lines().flat_map(|l| s.feed(l)).collect();
+        let its: Vec<(u32, f64, f64)> = ev
+            .iter()
+            .filter_map(|e| match e {
+                Event::Iteration { it, time, force, residuals, .. } => Some((*it, *time, force[0] + residuals.get("p").copied().unwrap_or(0.0))),
+                _ => None,
+            })
+            .collect();
+        // the steady start, then steps counted afresh in the solve stage, times in seconds
+        assert_eq!(its.len(), 3);
+        assert_eq!((its[0].0, its[0].1), (1, 1.0));
+        assert_eq!((its[1].0, its[1].1), (1, 1.25e-5));
+        assert!((its[1].2 - (0.0154 + 0.01)).abs() < 1e-12, "first PIMPLE residual kept");
+        assert_eq!((its[2].0, its[2].1), (2, 1.875e-5));
+        assert_eq!(s.courant_max, Some(1.01));
+        assert_eq!(s.iteration, 2);
     }
 }

@@ -79,7 +79,7 @@ fn serve(args: &[String], port: u16) -> anyhow::Result<()> {
             tokio::task::spawn_blocking(move || {
                 system::refresh(&app);
                 // OpenFOAM/CalculiX containers an earlier engine left running
-                system::kill_stale_containers();
+                system::kill_stale_containers(&app);
             });
         }
         tokio::spawn(jobs::worker(app.clone(), grx));

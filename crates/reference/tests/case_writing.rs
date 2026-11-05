@@ -162,3 +162,117 @@ fn nothing_to_simulate_is_an_error() {
     let s = icosphere([0.0; 3], 0.01, 2);
     assert!(simlab_reference::plan::plan(&s, &wind(0.0, GridQuality::Draft), 0.001).is_err());
 }
+
+/// The model follows the Reynolds number: laminar below 300, k-ω SST to
+/// 5000, SST with Langtry–Menter transition above; all steady unless a run
+/// length is asked for. The transition model gets its two extra fields.
+#[test]
+fn still_parts_pick_the_model_by_reynolds_number() {
+    let s = icosphere([0.0; 3], 0.01, 3);
+    let nu = Air::default().kinematic_viscosity;
+    let at = |re: f64| simlab_reference::plan::plan(&s, &wind(re * nu / 0.02, GridQuality::Draft), 0.001).unwrap();
+    assert_eq!(at(100.0).turbulence_name(), "laminar");
+    assert_eq!(at(100.0).layers, 0, "the validated Re 100 Draft mesh is kept");
+    let p = at(1000.0);
+    assert_eq!(p.turbulence_name(), "k-omega SST");
+    assert!(p.transient.is_none());
+    assert_eq!(p.layers, 3, "the wall is resolved above Re 300 at every quality");
+    let p = at(2.0e4);
+    assert_eq!(p.turbulence_name(), "k-omega SST with Langtry-Menter transition");
+    assert!(p.transient.is_none());
+    // free-stream transition onset for 0.5 % turbulence (Langtry–Menter)
+    assert!((simlab_reference::plan::re_theta_t(0.005) - 879.67).abs() < 0.1);
+
+    let dir = tmp("lm");
+    let prep = prepare_case(&s, &wind(2.0e4 * nu / 0.02, GridQuality::Draft), 0.001, &dir, 8).unwrap();
+    assert!(prep.plan.transient.is_none());
+    check_dicts(&dir, &["0.orig/ReThetat", "0.orig/gammaInt", "constant/turbulenceProperties", "system/fvSchemes", "system/fvSolution"]);
+    let read = |f: &str| std::fs::read_to_string(dir.join(f)).unwrap();
+    assert!(read("constant/turbulenceProperties").contains("RASModel kOmegaSSTLM;"));
+    for f in ["ReThetat", "gammaInt"] {
+        let t = read(&format!("0.orig/{f}"));
+        for patch in ["part", "inlet", "outlet", "sideA", "sideB", "sideC", "sideD"] {
+            assert!(t.contains(&format!("    {patch} {{")), "{f} lacks {patch}");
+        }
+        assert!(t.contains("part { type zeroGradient; }"));
+    }
+    assert!(read("0.orig/ReThetat").contains("inlet { type fixedValue; value uniform 8.79674"));
+    assert!(read("system/fvSchemes").contains("div(phi,ReThetat) bounded Gauss upwind;"));
+    assert!(read("system/fvSolution").contains("(U|k|omega|ReThetat|gammaInt)"));
+    let ar = read("Allrun");
+    assert!(ar.contains("step solve mpirun") && ar.contains("simpleFoam -parallel") && !ar.contains("pimpleFoam"));
+    assert!(!dir.join("system/controlDict.init").exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// Asking for a run length (flow passes) gives a time-accurate run: a
+/// steady start with the same model (the `.init` files), then pimpleFoam,
+/// forces averaged after the start-up, mean fields sampled.
+#[test]
+fn a_run_length_gives_a_time_accurate_run() {
+    let dir = tmp("transient");
+    let s = icosphere([0.0; 3], 0.01, 3);
+    let mut cfg = wind(15.0, GridQuality::Draft); // 20 mm sphere, Re ≈ 19,800
+    cfg.duration = Some(24.0);
+    let prep = prepare_case(&s, &cfg, 0.001, &dir, 8).unwrap();
+    let p = &prep.plan;
+    let t = p.transient.as_ref().expect("time-accurate");
+    assert_eq!(p.turbulence_name(), "k-omega SST with Langtry-Menter transition");
+    assert!((t.flow_time - 0.02 / 15.0).abs() < 1e-12);
+    let (skip, min_avg, _) = simlab_reference::plan::transient_passes(&GridQuality::Draft);
+    assert!((t.end_time / t.flow_time - 24.0).abs() < 1e-9);
+    assert!((t.average_from / t.flow_time - skip).abs() < 1e-9);
+    assert!((t.min_average / t.flow_time - min_avg).abs() < 1e-9);
+    assert!(t.average_from + t.min_average < t.end_time);
+    assert_eq!((t.max_co, t.outer_correctors), (4.0, 2));
+    assert!(t.dt_estimate > 1e-5 && t.dt_estimate < 1e-4, "{}", t.dt_estimate);
+    assert!(t.steps() > 300 && t.steps() < 5000, "{}", t.steps());
+    check_dicts(
+        &dir,
+        &[
+            "system/controlDict", "system/controlDict.init", "system/fvSchemes", "system/fvSchemes.init",
+            "system/fvSolution", "system/fvSolution.init", "constant/turbulenceProperties",
+            "constant/turbulenceProperties.init", "system/sampleDict", "0.orig/k", "0.orig/omega", "0.orig/nut",
+            "0.orig/ReThetat", "0.orig/gammaInt",
+        ],
+    );
+    let read = |f: &str| std::fs::read_to_string(dir.join(f)).unwrap();
+    let cd = read("system/controlDict");
+    assert!(cd.contains("application pimpleFoam;") && cd.contains("adjustTimeStep yes;") && cd.contains("maxCo 4;"));
+    assert!(cd.contains("type fieldAverage;") && cd.contains(&format!("timeStart {:.9e};", t.average_from)));
+    let init = read("system/controlDict.init");
+    assert!(init.contains("application simpleFoam;") && init.contains("endTime 300;"));
+    assert!(!init.contains("fieldAverage"));
+    assert!(read("constant/turbulenceProperties.init").contains("RASModel kOmegaSSTLM;"));
+    assert!(read("system/fvSchemes").contains("ddtSchemes { default backward; }"));
+    assert!(read("system/fvSchemes.init").contains("steadyState"));
+    assert!(read("system/fvSolution").contains("nOuterCorrectors 2;") && read("system/fvSolution.init").contains("SIMPLE"));
+    assert!(read("system/sampleDict").contains("fields (pMean UMean);"));
+    let ar = read("Allrun");
+    let (i_init, i_solve, i_sample) = (ar.find("step init").unwrap(), ar.find("step solve").unwrap(), ar.find("step sample").unwrap());
+    assert!(i_init < i_solve && i_solve < i_sample);
+    assert!(ar.contains("simpleFoam -parallel") && ar.contains("pimpleFoam -parallel") && ar.contains("'(pMean UMean)'"));
+    // the init swap restores the time-accurate files before pimpleFoam
+    assert!(ar.find("mv $f.run $f").unwrap() < i_solve);
+    std::fs::remove_dir_all(&dir).ok();
+
+    // a short run averages over its second half
+    cfg.duration = Some(10.0);
+    let t = simlab_reference::plan::plan(&s, &cfg, 0.001).unwrap().transient.unwrap();
+    assert!((t.end_time / t.flow_time - 10.0).abs() < 1e-9);
+    assert!((t.average_from / t.flow_time - 5.0).abs() < 1e-9);
+}
+
+/// Spinning parts keep the validated steady MRF method.
+#[test]
+fn spinning_parts_stay_steady() {
+    let s = icosphere([0.0; 3], 0.038, 2);
+    let mut cfg = wind(10.0, GridQuality::Normal);
+    cfg.spin = Some(Spin { rpm: 20000.0, axis: [1.0, 0.0, 0.0], center_mm: [0.0, 0.0, 0.0] });
+    let p = simlab_reference::plan::plan(&s, &cfg, 0.001).unwrap();
+    assert!(p.transient.is_none());
+    assert_eq!(p.turbulence_name(), "k-omega SST");
+    cfg.speed_m_s = 0.0;
+    let p = simlab_reference::plan::plan(&s, &cfg, 0.001).unwrap();
+    assert!(p.transient.is_none() && p.kind == Kind::SpinHover);
+}

@@ -26,7 +26,7 @@ pub const G: f64 = 9.80665;
 
 /// The one-line accuracy notes. They lead the headline of every quick
 /// preview, so nobody reads a preview's number as the answer.
-pub const PREVIEW_NOTE_STILL: &str = "Drag within about 3% on simple shapes at low Reynolds number, less certain above.";
+pub const PREVIEW_NOTE_STILL: &str = "Quick preview. On test shapes, drag is within about 5% for rounded bodies (sphere, Re 20 to 10,000) and reads about 10–15% low on sharp-edged plates. Lift, side force and anything that depends on thin boundary layers (airfoils, wings, small fins) are less certain, and can be off by 20% or more. Use the OpenFOAM test for numbers you will rely on.";
 pub const PREVIEW_NOTE_SPIN: &str = "Rough picture only: thrust can be 30–90% off (quick previews of a 3-inch prop read 32–50 g where OpenFOAM gets 345 g); use Accurate for numbers.";
 
 /// What the run settles on before it starts: where the part spins about.
@@ -93,21 +93,44 @@ pub fn accuracy(engine: &str, spin: bool) -> Value {
             "checked_against": "Your 2026 OpenFOAM propeller study: E-v5 at 45,800 rpm 345.8 g vs 346.0 g, P-v2 380.0 g vs 378.4 g, E-v5 at 17,000 rpm 45.7 g vs 45.8 g",
             "typical_error": "Thrust within about 3% and torque within about 7% (that is how much they move between mesh sizes); within 0.6% of your earlier OpenFOAM runs of the same props.",
         }),
-        ("reference", false) => json!({
-            "method": "OpenFOAM v2606: snappyHexMesh mesh around the part, steady RANS (k-ω SST, or laminar at low Reynolds number)",
-            "checked_against": "Sphere drag at Reynolds number 100 and 1000 (Clift, Schiller–Naumann)",
-            "typical_error": "Drag within about 1% on simple shapes (sphere 0.2–1.3%); sharp-edged parts in turbulent flow are less certain, a few percent.",
-        }),
+        ("reference", false) => reference_still_accuracy(f64::INFINITY),
         (_, true) => json!({
             "method": "SimLab's GPU wind tunnel: lattice Boltzmann (D3Q19, LES), the part re-drawn on the grid as it turns",
             "checked_against": "OpenFOAM runs of E-v5 and P-v2 at 17,000–45,800 rpm (full Normal and Fine grids: thrust 29–63% low); E-v5 quick previews (57–64 cells across): 86–91% low",
             "typical_error": format!("{PREVIEW_NOTE_SPIN} Torque can be 20–55% high, or more than double in a quick preview. Good for seeing the flow, not for the numbers."),
         }),
         (_, false) => json!({
-            "method": "SimLab's GPU wind tunnel: lattice Boltzmann (D3Q19, LES) with interpolated walls",
-            "checked_against": "Sphere drag from Reynolds number 20 to 10,000",
-            "typical_error": format!("{PREVIEW_NOTE_STILL} Sphere: within about 3% up to Re 300, 8.5% low at Re 1000, 3% high at Re 10,000. Use Accurate for numbers you rely on."),
+            "method": "SimLab's GPU wind tunnel: lattice Boltzmann (D3Q27 cumulant collision, nested grid refinement round the part) with interpolated walls, forces averaged over time",
+            "checked_against": "Sphere drag from Reynolds number 20 to 10,000; a thin disk square to the wind at Re 10,000",
+            "typical_error": PREVIEW_NOTE_STILL,
         }),
+    }
+}
+
+/// "How sure" for an OpenFOAM run of a still part, by the regime its
+/// Reynolds number puts it in (the same thresholds the case plan uses to
+/// pick the model). Numbers from the validation runs in
+/// `simlab_reference`'s crate docs.
+pub fn reference_still_accuracy(re: f64) -> Value {
+    use simlab_reference::plan::{RE_STEADY, RE_TRANSITION};
+    if re < RE_STEADY {
+        json!({
+            "method": "OpenFOAM v2606: snappyHexMesh mesh around the part, steady laminar flow (the real flow is steady at this Reynolds number)",
+            "checked_against": "Sphere drag at Reynolds number 100 (Clift; Schiller–Naumann)",
+            "typical_error": "Drag within about 1% on simple shapes at this low Reynolds number (sphere at Re 100: +0.1 to +1.3%).",
+        })
+    } else if re < RE_TRANSITION {
+        json!({
+            "method": "OpenFOAM v2606: snappyHexMesh mesh with boundary-layer cells, steady RANS with the k-ω SST turbulence model",
+            "checked_against": "Sphere drag at Reynolds number 1000 (Clift: +0.2% Normal, +1.5% Draft)",
+            "typical_error": "Drag within about 2% on rounded shapes at this Reynolds number. Sharp-edged parts are less certain, about 6% (a square plate across the wind read 6% high at Re 20,000).",
+        })
+    } else {
+        json!({
+            "method": "OpenFOAM v2606: snappyHexMesh mesh with boundary-layer cells, steady RANS with k-ω SST and the Langtry–Menter transition model (the boundary layer stays laminar until it separates, as on a small part in calm air)",
+            "checked_against": "Sphere at Reynolds number 10,000 (+0.7% Draft, −8% Normal), 20,000 (−9% Draft, −15% Normal) and 100,000 (−26% Draft); square plate across the wind at 20,000 (+6%); circular cylinder at 20,000 (+1 to +3%)",
+            "typical_error": "Sharp-edged and cylindrical parts (plates, arms) within about 6% up to Re 20,000. Rounded, ball-like parts read low: about 8% near Re 10,000, 10–15% at Re 20,000 and 25% or more near Re 100,000, and a finer mesh does not close the gap: the real boundary layer there separates and its wake swings in a way a steady model cannot follow. SimLab's quick preview has come closer on a sphere at Re 20,000 (within 1%), so check rounded parts there too.",
+        })
     }
 }
 
@@ -136,7 +159,7 @@ fn openfoam(ctx: &Ctx, r: &RunRow, cfg: &WindConfig, surf_m: &TriMesh, spin: boo
     let threads = ctx.app.settings().cpu_threads.max(1);
     ctx.log(&format!("OpenFOAM case in {} with up to {threads} cores", dir.display()));
     ctx.phase("running", 0.0, 0.98);
-    let res = simlab_reference::run_openfoam(surf_m, cfg, 0.001, &dir, threads, ctx)?;
+    let res = simlab_reference::run_openfoam_with(&crate::system::reference_options(ctx.app), surf_m, cfg, 0.001, &dir, threads, ctx)?;
     ctx.phase("running", 0.98, 1.0);
     ctx.report(0.0, "Saving the results");
     ctx.log(&format!("OpenFOAM log: {}", res.log_path.display()));
@@ -204,9 +227,12 @@ fn openfoam(ctx: &Ctx, r: &RunRow, cfg: &WindConfig, surf_m: &TriMesh, spin: boo
         "seconds": res.seconds,
         "converged": res.converged,
         "turbulence": res.turbulence,
+        "solver": res.solver,
+        "averaged_flow_passes": res.averaged_flow_passes,
+        "drag_fluctuation_n": res.drag_fluctuation,
         "y_plus": res.y_plus,
         "warnings": warnings,
-        "accuracy": accuracy("reference", spin),
+        "accuracy": if spin { accuracy("reference", true) } else { reference_still_accuracy(res.reynolds) },
         "case_dir": res.case_dir,
         "case_bytes": case_bytes,
         "case_bytes_untrimmed": before,
@@ -473,10 +499,13 @@ fn gpu_estimate(app: &App, surf_m: &TriMesh, cfg: &WindConfig) -> Result<Value> 
 }
 
 /// The GPU tunnel's own time estimate against measured runs on an M4 Max
-/// (November 2026): spinning E-v5 at Draft, 82 s estimated → 188 s; a still
-/// sphere at Draft, 134 s → 181 s.
+/// (November 2026): spinning E-v5 at Draft, 82 s estimated → 188 s. Still
+/// parts on the refined D3Q27 solver (commit 8508cc5), 20 mm sphere at
+/// 15 m/s through the engine: Draft (57 cells across) 116.7 s → 117.7 s,
+/// Normal (49 across) 128.6 s → 129.2 s, so its estimate is right to 1 %;
+/// 5 % margin.
 const GPU_SLOWER_SPIN: f64 = 2.3;
-const GPU_SLOWER_STILL: f64 = 1.35;
+const GPU_SLOWER_STILL: f64 = 1.05;
 /// A preview never plans to take longer than this, nor more than half the
 /// accurate run's time: otherwise it is not a preview.
 const PREVIEW_MAX_S: f64 = 180.0;
@@ -549,27 +578,57 @@ pub fn preview_plan(app: &App, cfg: &WindConfig, surf_m: &TriMesh) -> Result<Pre
 /// | spinning (E-v5) | Fine | 1.62 M → 2.31 M | 1559 s | 6.6e-4 |
 /// | still (sphere Re 1000) | Draft | 312 k → 341 k | 150 s | 3.5e-4 |
 /// | still (sphere Re 100/1000) | Normal | 1.05 M → 1.59 M | 683–900 s | 4.1–5.5e-4 |
+/// | still, transition SST (sphere Re 2·10⁴) | Draft | 312 k → 398 k | 350 s | 8.8e-4 |
+/// | still, transition SST (sphere Re 1–2·10⁴) | Normal | 1.05 M → 1.60 M | 1704–2035 s | 1.06–1.27e-3 |
+/// | still, transition SST (sphere Re 2·10⁴) | Fine | 5.95 M → 10.3 M | ≈10 s per iteration | ≈1.6e-3 (not finished) |
 ///
-/// Still Fine was not run; it is extrapolated from Normal. Memory: 3.5 GB
+/// The transition-model rows ran two 8-core jobs side by side in a
+/// 16-core Colima. Still Fine with plain SST was not run; it is
+/// extrapolated from Normal. Memory: 3.5 GB
 /// for the 1.86 M-cell Normal propeller run. More than 8 cores did not
 /// help: the same Normal propeller run took 582 s on 12 (Colima 12 cores),
 /// so fewer than 8 slow it down as (8 / cores)^0.8 and more change nothing.
+/// Time-accurate runs (a still part with a run length asked for), per
+/// final cell: meshing, the 300-iteration steady start, then the time
+/// steps (unsteady RANS, Courant 4, two outer correctors). A run stops once
+/// its average has settled, usually a little after the shortest averaging
+/// time; the estimate counts that point, not the most it may run. Measured
+/// on the quasi-2D cylinder at Re 2·10⁴ (856 k cells, 0.62 s per step on 12
+/// cores, so about 1.0e-6 s per cell-step on 8).
+pub const TRANSIENT_MESH_S_PER_CELL: f64 = 1.0e-4;
+pub const TRANSIENT_INIT_S_PER_CELL_ITER: f64 = 8.0e-7;
+pub const TRANSIENT_STEP_S_PER_CELL: f64 = 1.0e-6;
+
+fn transient_seconds_per_cell(t: &simlab_reference::plan::Transient) -> f64 {
+    let expected = (1.15 * (t.average_from + t.min_average)).min(t.end_time);
+    let steps = expected / t.dt_estimate.max(1e-12);
+    TRANSIENT_MESH_S_PER_CELL + t.init_iterations as f64 * TRANSIENT_INIT_S_PER_CELL_ITER + steps * TRANSIENT_STEP_S_PER_CELL
+}
+
 fn openfoam_estimate(app: &App, surf_m: &TriMesh, cfg: &WindConfig) -> Result<Value> {
     let plan = simlab_reference::plan::plan(surf_m, cfg, 0.001)?;
     let planned = simlab_reference::plan::estimate_cells(&plan, surf_m) as f64;
     let spin = plan.rotor.is_some();
+    // the transition model: two more equations and more iterations to settle
+    let lm = matches!(plan.turbulence, simlab_reference::plan::Turbulence::KOmegaSstLm { .. });
     let (grow, s_per_cell) = match (&cfg.quality, spin) {
         (GridQuality::Draft, true) => (1.46, 3.8e-4),
         (GridQuality::Fine, true) => (1.43, 6.6e-4),
         (_, true) => (1.15, 3.0e-4),
+        // Draft has prism layers above Re 300 (more cells than planned)
+        (GridQuality::Draft, false) if plan.layers > 0 => (1.28, if lm { 8.8e-4 } else { 4.5e-4 }),
         (GridQuality::Draft, false) => (1.10, 3.5e-4),
-        (GridQuality::Fine, false) => (1.5, 6.5e-4),
-        (_, false) => (1.52, 5.0e-4),
+        (GridQuality::Fine, false) => (1.73, if lm { 1.6e-3 } else { 6.5e-4 }),
+        (_, false) => (1.52, if lm { 1.06e-3 } else { 5.0e-4 }),
     };
     let cells = planned * grow;
     let (vm_cpus, vm_mem) = crate::system::docker_vm();
     let threads = app.settings().cpu_threads.max(1).min(vm_cpus.unwrap_or(usize::MAX)) as f64;
-    let seconds = 30.0 + cells * s_per_cell * (8.0 / threads.min(8.0)).powf(0.8);
+    let slow = (8.0 / threads.min(8.0)).powf(0.8);
+    let seconds = match &plan.transient {
+        None => 30.0 + cells * s_per_cell * slow,
+        Some(t) => 30.0 + cells * slow * transient_seconds_per_cell(t),
+    };
     let memory = (0.4e9 + 1700.0 * cells) as u64;
     let budget = vm_mem.unwrap_or_else(|| app.settings().budget_bytes());
     let fits = memory <= budget;

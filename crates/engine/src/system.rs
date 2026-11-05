@@ -291,7 +291,7 @@ pub fn fix(app: &Arc<App>, id: &str) -> anyhow::Result<()> {
                 // ours to stop when SimLab quits; a Colima that was already
                 // running is left alone
                 app.started_colima.store(true, std::sync::atomic::Ordering::SeqCst);
-                kill_stale_containers();
+                kill_stale_containers(app);
             }
             r
         }
@@ -305,22 +305,25 @@ pub fn fix(app: &Arc<App>, id: &str) -> anyhow::Result<()> {
     result
 }
 
-/// Kills reference containers (OpenFOAM, CalculiX) left by an engine that
-/// quit mid-run. Quick, and harmless when Docker is not running.
-pub fn kill_stale_containers() -> usize {
+/// Kills reference containers (OpenFOAM, CalculiX) this engine's data
+/// folder left running (an engine that quit or crashed mid-run). Another
+/// engine on another data folder sharing Colima keeps its runs. Quick, and
+/// harmless when Docker is not running.
+pub fn kill_stale_containers(app: &App) -> usize {
     if !docker_running() {
         return 0;
     }
-    let n = simlab_reference::kill_stale_containers(&reference_options());
+    let n = simlab_reference::kill_stale_containers(&reference_options(app));
     if n > 0 {
         eprintln!("stopped {n} leftover reference container(s)");
     }
     n
 }
 
-/// Docker CLI and image for the reference runs, found the same way as the checks.
-pub fn reference_options() -> simlab_reference::RunOptions {
-    let mut o = simlab_reference::RunOptions::default();
+/// Docker CLI and image for the reference runs, found the same way as the
+/// checks; containers are labelled with this engine's data folder.
+pub fn reference_options(app: &App) -> simlab_reference::RunOptions {
+    let mut o = simlab_reference::RunOptions { owner: Some(simlab_reference::owner_id(&app.data)), ..Default::default() };
     if let Some(d) = find_program("docker") {
         o.docker = d;
     }
@@ -332,7 +335,7 @@ pub fn reference_options() -> simlab_reference::RunOptions {
 /// stop reference containers, and Colima if SimLab started it. Colima's
 /// stop runs on its own, so the app's few seconds' wait never cuts it off.
 pub fn shutdown(app: &App) {
-    kill_stale_containers();
+    kill_stale_containers(app);
     if app.started_colima.swap(false, std::sync::atomic::Ordering::SeqCst)
         && let Some(colima) = find_program("colima")
     {

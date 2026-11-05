@@ -14,7 +14,7 @@
 //!   0.orig/{U,p,k,omega,nut}     starting fields (copied to 0/ after meshing)
 //! ```
 
-use crate::plan::{Kind, Plan, Region, Turbulence};
+use crate::plan::{Kind, Plan, Region, Transient, Turbulence};
 use anyhow::{Context, Result};
 use simlab_core::{TriMesh, Vec3, stl::write_binary_stl};
 use std::fmt::Write as _;
@@ -73,11 +73,20 @@ pub fn write_case(dir: &Path, surface: &TriMesh, p: &Plan, threads: usize) -> Re
     dict(dir, "system/fvSchemes", "dictionary", FV_SCHEMES)?;
     dict(dir, "system/fvSolution", "dictionary", FV_SOLUTION)?;
     dict(dir, "constant/transportProperties", "dictionary", &format!("transportModel Newtonian;\nnu {};\n", g(p.nu)))?;
-    let turb = match p.turbulence {
-        Turbulence::Laminar => "simulationType laminar;\n".to_string(),
-        Turbulence::KOmegaSst { .. } => "simulationType RAS;\nRAS\n{\n    RASModel kOmegaSST;\n    turbulence on;\n    printCoeffs on;\n}\n".into(),
-    };
-    dict(dir, "constant/turbulenceProperties", "dictionary", &turb)?;
+    let _ = std::fs::remove_file(dir.join("constant/turbulenceProperties.init"));
+    for f in ["controlDict", "fvSchemes", "fvSolution"] {
+        let _ = std::fs::remove_file(dir.join(format!("system/{f}.init")));
+    }
+    dict(dir, "constant/turbulenceProperties", "dictionary", &turbulence_properties(&p.turbulence))?;
+    if let Some(t) = &p.transient {
+        // the steady start: the same model, solved steady; Allrun swaps these in
+        dict(dir, "constant/turbulenceProperties.init", "dictionary", &turbulence_properties(&p.turbulence))?;
+        write(dir, "system/controlDict.init", &(header("dictionary", "controlDict", "system") + &control_dict_init(p, t)))?;
+        dict(dir, "system/fvSchemes.init", "dictionary", FV_SCHEMES)?;
+        dict(dir, "system/fvSolution.init", "dictionary", FV_SOLUTION)?;
+        dict(dir, "system/fvSchemes", "dictionary", &fv_schemes_transient(&p.turbulence))?;
+        dict(dir, "system/fvSolution", "dictionary", &fv_solution_transient(t))?;
+    }
     if let Some(r) = &p.rotor {
         dict(
             dir,
@@ -95,7 +104,7 @@ pub fn write_case(dir: &Path, surface: &TriMesh, p: &Plan, threads: usize) -> Re
         let _ = std::fs::remove_file(dir.join("constant/MRFProperties"));
     }
     write_fields(dir, p)?;
-    write(dir, "Allrun", &allrun(threads))?;
+    write(dir, "Allrun", &allrun_for(threads, p.transient.is_some()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -196,7 +205,46 @@ pub fn control_dict_file(p: &Plan, stop: bool) -> String {
 
 /// `stop`: ask a running solver to write and finish now (the engine edits
 /// this file when the forces have settled; runTimeModifiable picks it up).
+/// For a time-accurate plan this is the pimpleFoam run's file (the steady
+/// start uses `controlDict.init`).
 pub fn control_dict(p: &Plan, stop: bool) -> String {
+    let stop_at = if stop { "writeNow" } else { "endTime" };
+    match &p.transient {
+        None => format!(
+            "application simpleFoam;\nstartFrom latestTime;\nstartTime 0;\nstopAt {stop_at};\nendTime {end};\ndeltaT 1;\n\
+writeControl timeStep;\nwriteInterval 500;\npurgeWrite 2;\nwriteFormat binary;\nwritePrecision 8;\nwriteCompression off;\n\
+timeFormat general;\ntimePrecision 6;\nrunTimeModifiable true;\n\nfunctions\n{{\n{f}}}\n",
+            end = p.max_iterations,
+            f = function_objects(p, None),
+        ),
+        Some(t) => format!(
+            "application pimpleFoam;\nstartFrom startTime;\nstartTime 0;\nstopAt {stop_at};\nendTime {end};\ndeltaT {dt};\n\
+adjustTimeStep yes;\nmaxCo {co};\nmaxDeltaT 1;\n\
+writeControl adjustableRunTime;\nwriteInterval {end};\npurgeWrite 1;\nwriteFormat binary;\nwritePrecision 8;\nwriteCompression off;\n\
+timeFormat general;\ntimePrecision 8;\nrunTimeModifiable true;\n\nfunctions\n{{\n{f}}}\n",
+            end = g(t.end_time),
+            dt = g(t.dt0),
+            co = t.max_co,
+            f = function_objects(p, Some(t)),
+        ),
+    }
+}
+
+/// The steady start of a time-accurate run: `init_iterations` of simpleFoam.
+pub fn control_dict_init(p: &Plan, t: &Transient) -> String {
+    format!(
+        "application simpleFoam;\nstartFrom startTime;\nstartTime 0;\nstopAt endTime;\nendTime {n};\ndeltaT 1;\n\
+writeControl timeStep;\nwriteInterval {n};\npurgeWrite 1;\nwriteFormat binary;\nwritePrecision 8;\nwriteCompression off;\n\
+timeFormat general;\ntimePrecision 6;\nrunTimeModifiable true;\n\nfunctions\n{{\n{f}}}\n",
+        n = t.init_iterations,
+        f = function_objects(p, None),
+    )
+}
+
+/// forces (and coefficients in a wind) every step; y+ when written; for a
+/// time-accurate run, the mean pressure and velocity from `average_from`
+/// (what the surface pressure and slices show).
+fn function_objects(p: &Plan, t: Option<&Transient>) -> String {
     let mut f = format!(
         "    forces\n    {{\n        type forces;\n        libs (forces);\n        writeControl timeStep;\n        writeInterval 1;\n        log true;\n        patches ({PART});\n        rho rhoInf;\n        rhoInf {rho};\n        CofR {cofr};\n    }}\n",
         rho = g(p.rho),
@@ -216,28 +264,68 @@ pub fn control_dict(p: &Plan, stop: bool) -> String {
             g(p.ref_area.max(1e-30))
         );
     }
-    if matches!(p.turbulence, Turbulence::KOmegaSst { .. }) {
+    if p.turbulence.k_omega().is_some() {
         f.push_str("    yPlus\n    {\n        type yPlus;\n        libs (fieldFunctionObjects);\n        writeControl writeTime;\n    }\n");
     }
+    if let Some(t) = t {
+        let _ = write!(
+            f,
+            "    average\n    {{\n        type fieldAverage;\n        libs (fieldFunctionObjects);\n        writeControl writeTime;\n        timeStart {};\n        restartOnRestart false;\n        fields\n        (\n            p {{ mean on; prime2Mean off; base time; }}\n            U {{ mean on; prime2Mean off; base time; }}\n        );\n    }}\n",
+            g(t.average_from)
+        );
+    }
+    f
+}
+
+/// What the case's turbulence model is, as constant/turbulenceProperties.
+pub fn turbulence_properties(t: &Turbulence) -> String {
+    let ras = |m: &str| format!("simulationType RAS;\nRAS\n{{\n    RASModel {m};\n    turbulence on;\n    printCoeffs on;\n}}\n");
+    match t {
+        Turbulence::Laminar => "simulationType laminar;\n".into(),
+        Turbulence::KOmegaSst { .. } => ras("kOmegaSST"),
+        Turbulence::KOmegaSstLm { .. } => ras("kOmegaSSTLM"),
+    }
+}
+
+/// Second-order in time (backward). Momentum: LUST (75 % central) for a
+/// laminar run, linear-upwind for unsteady RANS.
+pub fn fv_schemes_transient(t: &Turbulence) -> String {
+    let u = match t {
+        Turbulence::Laminar => "Gauss LUST grad(U)",
+        _ => "Gauss linearUpwindV grad(U)",
+    };
     format!(
-        "application simpleFoam;\nstartFrom latestTime;\nstartTime 0;\nstopAt {stop};\nendTime {end};\ndeltaT 1;\n\
-writeControl timeStep;\nwriteInterval 500;\npurgeWrite 2;\nwriteFormat binary;\nwritePrecision 8;\nwriteCompression off;\n\
-timeFormat general;\ntimePrecision 6;\nrunTimeModifiable true;\n\nfunctions\n{{\n{f}}}\n",
-        stop = if stop { "writeNow" } else { "endTime" },
-        end = p.max_iterations,
+        "ddtSchemes {{ default backward; }}\n\
+gradSchemes {{ default cellLimited Gauss linear 1; grad(U) cellLimited Gauss linear 1; }}\n\
+divSchemes\n{{\n    default none;\n    div(phi,U) {u};\n    div(phi,k) Gauss limitedLinear 1;\n    div(phi,omega) Gauss limitedLinear 1;\n    div(phi,ReThetat) Gauss limitedLinear 1;\n    div(phi,gammaInt) Gauss limitedLinear 1;\n    div((nuEff*dev2(T(grad(U))))) Gauss linear;\n}}\n\
+laplacianSchemes {{ default Gauss linear limited 0.5; }}\n\
+interpolationSchemes {{ default linear; }}\n\
+snGradSchemes {{ default limited 0.5; }}\n\
+wallDist {{ method meshWave; }}\n"
+    )
+}
+
+pub fn fv_solution_transient(t: &Transient) -> String {
+    format!(
+        "solvers\n{{\n    p {{ solver GAMG; smoother GaussSeidel; tolerance 1e-6; relTol 0.01; }}\n    pFinal {{ $p; relTol 0; }}\n\
+    \"(U|k|omega|ReThetat|gammaInt)\" {{ solver smoothSolver; smoother symGaussSeidel; tolerance 1e-7; relTol 0.1; }}\n\
+    \"(U|k|omega|ReThetat|gammaInt)Final\" {{ solver smoothSolver; smoother symGaussSeidel; tolerance 1e-7; relTol 0; }}\n}}\n\n\
+PIMPLE\n{{\n    nOuterCorrectors {};\n    nCorrectors 2;\n    nNonOrthogonalCorrectors 1;\n    momentumPredictor yes;\n}}\n\n\
+relaxationFactors {{ equations {{ \".*\" 1; }} }}\n",
+        t.outer_correctors.max(1)
     )
 }
 
 const FV_SCHEMES: &str = "ddtSchemes { default steadyState; }\n\
 gradSchemes { default cellLimited Gauss linear 1; }\n\
-divSchemes\n{\n    default none;\n    div(phi,U) bounded Gauss linearUpwindV grad(U);\n    div(phi,k) bounded Gauss upwind;\n    div(phi,omega) bounded Gauss upwind;\n    div((nuEff*dev2(T(grad(U))))) Gauss linear;\n}\n\
+divSchemes\n{\n    default none;\n    div(phi,U) bounded Gauss linearUpwindV grad(U);\n    div(phi,k) bounded Gauss upwind;\n    div(phi,omega) bounded Gauss upwind;\n    div(phi,ReThetat) bounded Gauss upwind;\n    div(phi,gammaInt) bounded Gauss upwind;\n    div((nuEff*dev2(T(grad(U))))) Gauss linear;\n}\n\
 laplacianSchemes { default Gauss linear limited 0.5; }\n\
 interpolationSchemes { default linear; }\n\
 snGradSchemes { default limited 0.5; }\n\
 wallDist { method meshWave; }\n";
 
-const FV_SOLUTION: &str = "solvers\n{\n    p { solver GAMG; smoother GaussSeidel; tolerance 1e-7; relTol 0.05; }\n    \"(U|k|omega)\" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-8; relTol 0.1; }\n}\n\n\
-SIMPLE\n{\n    nNonOrthogonalCorrectors 1;\n    consistent yes;\n    residualControl { p 1e-5; U 1e-6; \"(k|omega)\" 1e-6; }\n}\n\n\
+const FV_SOLUTION: &str = "solvers\n{\n    p { solver GAMG; smoother GaussSeidel; tolerance 1e-7; relTol 0.05; }\n    \"(U|k|omega|ReThetat|gammaInt)\" { solver smoothSolver; smoother symGaussSeidel; tolerance 1e-8; relTol 0.1; }\n}\n\n\
+SIMPLE\n{\n    nNonOrthogonalCorrectors 1;\n    consistent yes;\n    residualControl { p 1e-5; U 1e-6; \"(k|omega|ReThetat|gammaInt)\" 1e-6; }\n}\n\n\
 relaxationFactors\n{\n    equations { U 0.7; \".*\" 0.7; }\n    fields { p 0.3; }\n}\n";
 
 /// Boundary conditions per field: (patch → entry).
@@ -276,7 +364,7 @@ fn write_fields(dir: &Path, p: &Plan) -> Result<()> {
         let _ = writeln!(b, "    {n} {{ {e} }}");
     }
     field(dir, "p", "volScalarField", "[0 2 -2 0 0 0 0]", "uniform 0", &b)?;
-    if let Turbulence::KOmegaSst { k, omega } = p.turbulence {
+    if let Some((k, omega)) = p.turbulence.k_omega() {
         for (name, val, wall, dim) in [
             ("k", k, "kqRWallFunction", "[0 2 -2 0 0 0 0]"),
             ("omega", omega, "omegaWallFunction", "[0 0 -1 0 0 0 0]"),
@@ -301,6 +389,25 @@ fn write_fields(dir: &Path, p: &Plan) -> Result<()> {
         }
         field(dir, "nut", "volScalarField", "[0 2 -1 0 0 0 0]", "uniform 0", &b)?;
     }
+    if let Turbulence::KOmegaSstLm { re_theta, .. } = p.turbulence {
+        // transition onset momentum-thickness Reynolds number and
+        // intermittency: free-stream values in, zero gradient at the wall
+        for (name, val) in [("ReThetat", re_theta), ("gammaInt", 1.0)] {
+            let x = g(val);
+            let mut b = format!("    {PART} {{ type zeroGradient; }}\n");
+            for (i, n) in FAR.iter().enumerate() {
+                let e = if hover || i == 1 {
+                    format!("type inletOutlet; inletValue uniform {x}; value uniform {x};")
+                } else if i == 0 {
+                    format!("type fixedValue; value uniform {x};")
+                } else {
+                    "type slip;".into()
+                };
+                let _ = writeln!(b, "    {n} {{ {e} }}");
+            }
+            field(dir, name, "volScalarField", "[0 0 0 0 0 0 0]", &format!("uniform {x}"), &b)?;
+        }
+    }
     Ok(())
 }
 
@@ -316,6 +423,17 @@ fn field(dir: &Path, name: &str, class: &str, dims: &str, internal: &str, bounda
 /// prints `@@SIMLAB stage <name>` first and tees its output to log.<name>,
 /// so the engine can follow along from the container's output.
 pub fn allrun(threads: usize) -> String {
+    allrun_for(threads, false)
+}
+
+/// The files a time-accurate run swaps for their `.init` versions during
+/// its steady start.
+const INIT_FILES: &str = "system/controlDict system/fvSchemes system/fvSolution constant/turbulenceProperties";
+
+/// `transient`: a steady simpleFoam start (stage `init`, the `.init` files),
+/// its last iteration made the starting time, then pimpleFoam (stage
+/// `solve`) and samples of the time-averaged fields.
+pub fn allrun_for(threads: usize, transient: bool) -> String {
     let n = threads.max(1);
     let par = n > 1;
     let mpi = format!("mpirun --allow-run-as-root --oversubscribe -np {n}");
@@ -325,7 +443,7 @@ pub fn allrun(threads: usize) -> String {
 for f in /usr/lib/openfoam/openfoam*/etc/bashrc; do . \"$f\"; done\n\
 set -eo pipefail\ncd /case\n\
 step() { local name=$1; shift; echo \"@@SIMLAB stage $name\"; \"$@\" 2>&1 | tee log.$name; }\n\
-rm -rf processor* 0 [1-9]* postProcessing log.* constant/polyMesh constant/extendedFeatureEdgeMesh constant/triSurface/*.eMesh\n\
+rm -rf processor* 0 0.[0-9]* [1-9]* postProcessing postProcessing.init log.* constant/polyMesh constant/extendedFeatureEdgeMesh constant/triSurface/*.eMesh\n\
 step feature surfaceFeatureExtract\nstep blockMesh blockMesh\n",
     );
     if par {
@@ -340,17 +458,30 @@ rm -rf processor*\n"
         s.push_str("step snappy snappyHexMesh -overwrite\n");
     }
     s.push_str("step checkMesh checkMesh -constant || true\ncp -r 0.orig 0\n");
-    if par {
+    let (run, pre, sample_fields) = if par {
+        s.push_str("step decompose decomposePar -force\n");
+        (format!("{mpi} "), " -parallel", if transient { "'(pMean UMean)'" } else { "'(p U)'" })
+    } else {
+        (String::new(), "", if transient { "'(pMean UMean)'" } else { "'(p U)'" })
+    };
+    if transient {
+        let dirs = if par { "processor*" } else { "." };
         let _ = write!(
             s,
-            "step decompose decomposePar -force\n\
-step solve {mpi} simpleFoam -parallel\n\
-step sample {mpi} postProcess -parallel -dict system/sampleDict -fields '(p U)' -latestTime\n\
-step reconstruct reconstructPar -latestTime\n\
-rm -rf processor*\n"
+            "for f in {INIT_FILES}; do cp $f $f.run; cp $f.init $f; done\n\
+step init {run}simpleFoam{pre}\n\
+for f in {INIT_FILES}; do mv $f.run $f; done\n\
+# the steady result becomes time 0 of the time-accurate run (fields it lacks are kept)\n\
+for d in {dirs}; do\n  t=$(ls -1 $d | grep -E '^[0-9][0-9.e+-]*$' | sort -g | tail -1)\n  if [ \"$t\" != 0 ]; then\n    for f in $d/0/*; do [ -e $d/$t/${{f##*/}} ] || mv $f $d/$t/; done\n    rm -rf $d/0 && mv $d/$t $d/0 && rm -rf $d/0/uniform\n  fi\ndone\n\
+rm -rf postProcessing.init && mv postProcessing postProcessing.init\n\
+step solve {run}pimpleFoam{pre}\n"
         );
     } else {
-        s.push_str("step solve simpleFoam\nstep sample postProcess -dict system/sampleDict -fields '(p U)' -latestTime\n");
+        let _ = writeln!(s, "step solve {run}simpleFoam{pre}");
+    }
+    let _ = writeln!(s, "step sample {run}postProcess{pre} -dict system/sampleDict -fields {sample_fields} -latestTime");
+    if par {
+        s.push_str("step reconstruct reconstructPar -latestTime\nrm -rf processor*\n");
     }
     s.push_str("echo \"@@SIMLAB stage done\"\n");
     s
@@ -360,14 +491,20 @@ rm -rf processor*\n"
 /// just off each vertex of the part (`vertices.points`), and the flow
 /// slices (`<name>.points`).
 pub fn sample_dict(slice_names: &[String]) -> String {
+    sample_dict_for(slice_names, false)
+}
+
+/// `mean`: sample the time-averaged fields (pMean, UMean) of a time-accurate run.
+pub fn sample_dict_for(slice_names: &[String], mean: bool) -> String {
+    let (pf, uf) = if mean { ("pMean", "UMean") } else { ("p", "U") };
     let mut sets = String::from("            vertices { type cloud; axis xyz; #include \"vertices.points\" }\n");
     for n in slice_names {
         let _ = writeln!(sets, "            {n} {{ type cloud; axis xyz; #include \"{n}.points\" }}");
     }
     header("dictionary", "sampleDict", "system")
         + &format!(
-            "functions\n{{\n    partSurface\n    {{\n        type surfaces;\n        libs (sampling);\n        interpolationScheme cellPoint;\n        surfaceFormat raw;\n        fields (p);\n        surfaces\n        {{\n            {PART} {{ type patch; patches ({PART}); interpolate false; }}\n        }}\n    }}\n\
-    probes\n    {{\n        type sets;\n        libs (sampling);\n        interpolationScheme cellPoint;\n        setFormat raw;\n        fields (p U);\n        sets\n        {{\n{sets}        }}\n    }}\n}}\n"
+            "functions\n{{\n    partSurface\n    {{\n        type surfaces;\n        libs (sampling);\n        interpolationScheme cellPoint;\n        surfaceFormat raw;\n        fields ({pf});\n        surfaces\n        {{\n            {PART} {{ type patch; patches ({PART}); interpolate false; }}\n        }}\n    }}\n\
+    probes\n    {{\n        type sets;\n        libs (sampling);\n        interpolationScheme cellPoint;\n        setFormat raw;\n        fields ({pf} {uf});\n        sets\n        {{\n{sets}        }}\n    }}\n}}\n"
         )
 }
 

@@ -75,6 +75,51 @@ pub enum Kind {
 pub enum Turbulence {
     Laminar,
     KOmegaSst { k: f64, omega: f64 },
+    /// k-ω SST with the Langtry–Menter γ–Reθ transition model: the
+    /// boundary layer stays laminar until it is tripped or separates, as on a
+    /// small part in calm air
+    KOmegaSstLm { k: f64, omega: f64, re_theta: f64 },
+}
+
+impl Turbulence {
+    /// free-stream k and ω (None for laminar)
+    pub fn k_omega(&self) -> Option<(f64, f64)> {
+        match *self {
+            Turbulence::Laminar => None,
+            Turbulence::KOmegaSst { k, omega } | Turbulence::KOmegaSstLm { k, omega, .. } => Some((k, omega)),
+        }
+    }
+}
+
+/// A time-accurate run (pimpleFoam): a steady start, then the flow followed
+/// in time (unsteady RANS) and the forces averaged once the start-up is over.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Transient {
+    /// steady iterations (same model) that give the time-accurate run its start
+    pub init_iterations: u32,
+    /// one flow pass over the part, L / U (s)
+    pub flow_time: f64,
+    /// the run stops here at the latest (s)
+    pub end_time: f64,
+    /// forces are averaged from here on, leaving out the start-up (s)
+    pub average_from: f64,
+    /// the shortest averaging time before the run may stop early (s)
+    pub min_average: f64,
+    /// largest Courant number OpenFOAM sizes the time step for
+    pub max_co: f64,
+    /// first time step (s); OpenFOAM then grows it up to max_co
+    pub dt0: f64,
+    /// the time step max_co gives in the smallest cells near the part (s), for estimates
+    pub dt_estimate: f64,
+    /// PIMPLE outer correctors per time step
+    pub outer_correctors: u32,
+}
+
+impl Transient {
+    /// time steps to the end time (for estimates)
+    pub fn steps(&self) -> u64 {
+        (self.end_time / self.dt_estimate.max(1e-12)).ceil() as u64
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -132,6 +177,9 @@ pub struct Plan {
     pub nu: f64,
     pub rho: f64,
     pub turbulence: Turbulence,
+    /// None: steady (simpleFoam); Some: time-accurate (pimpleFoam), forces averaged over time
+    pub transient: Option<Transient>,
+    /// steady runs: the iteration cap
     pub max_iterations: u32,
     pub min_iterations: u32,
     pub location_in_mesh: Vec3,
@@ -160,7 +208,12 @@ impl Plan {
         match self.turbulence {
             Turbulence::Laminar => "laminar",
             Turbulence::KOmegaSst { .. } => "k-omega SST",
+            Turbulence::KOmegaSstLm { .. } => "k-omega SST with Langtry-Menter transition",
         }
+    }
+    /// "steady" or "time-accurate"
+    pub fn solver_name(&self) -> &'static str {
+        if self.transient.is_some() { "time-accurate (pimpleFoam), forces averaged over time" } else { "steady (simpleFoam)" }
     }
 }
 
@@ -298,6 +351,7 @@ pub fn plan(surface: &TriMesh, cfg: &WindConfig, model_unit_m: f64) -> anyhow::R
             nu,
             rho,
             turbulence,
+            transient: None,
             max_iterations: max_it,
             min_iterations: 400,
             location_in_mesh,
@@ -330,6 +384,10 @@ pub fn plan(surface: &TriMesh, cfg: &WindConfig, model_unit_m: f64) -> anyhow::R
             ((s, s + 1), 3, 2000)
         }
     };
+    // above Re 300 the wall is resolved at every quality (the transition
+    // model needs the laminar layer; SST at Re 1000 too: +1.5 % with layers
+    // at Draft, +2.4 % without)
+    let layers = if speed * l / nu >= RE_STEADY { layers.max(3) } else { layers };
     let n = surface_level.0;
     let regions = vec![
         Region::NearPart { levels: vec![(0.15 * l, n.saturating_sub(1).max(1)), (0.5 * l, n.saturating_sub(2).max(1))] },
@@ -349,7 +407,8 @@ pub fn plan(surface: &TriMesh, cfg: &WindConfig, model_unit_m: f64) -> anyhow::R
         },
     ];
     let reynolds = speed * l / nu;
-    let turbulence = if reynolds < 300.0 { Turbulence::Laminar } else { freestream_sst(speed, nu) };
+    let h_surface = h0 / f64::powi(2.0, surface_level.0 as i32);
+    let (turbulence, transient) = wind_method(reynolds, speed, nu, l, h_surface, q, cfg.duration);
     let location_in_mesh = frame.to_model(center, [lo[0] + 1.37 * h0, lo[1] + 1.29 * h0, lo[2] + 1.41 * h0]);
     Ok(Plan {
         kind: Kind::Wind,
@@ -369,6 +428,7 @@ pub fn plan(surface: &TriMesh, cfg: &WindConfig, model_unit_m: f64) -> anyhow::R
         nu,
         rho,
         turbulence,
+        transient,
         max_iterations: max_it,
         min_iterations: 300,
         location_in_mesh,
@@ -383,9 +443,99 @@ pub fn plan(surface: &TriMesh, cfg: &WindConfig, model_unit_m: f64) -> anyhow::R
     })
 }
 
+/// Below this Reynolds number (U L / ν) the flow round a still part is
+/// steady and laminar (a sphere's wake starts to shed above Re ≈ 270).
+pub const RE_STEADY: f64 = 300.0;
+
+/// Above this Reynolds number a still part gets the Langtry–Menter
+/// transition model on top of k-ω SST. Plain SST treats the boundary layer
+/// as turbulent from the nose, so on a rounded part it separates too late
+/// and drag reads low (sphere: −14 % at Re 2·10⁴, −39 % at 10⁵); with the
+/// transition model the layer stays laminar to separation, as it does on a
+/// small part in calm air. Below it plain SST is as good or better (sphere
+/// Re 1000: +1.5 % vs +3.6 %) and both agree at Re 10⁴ (−1.8 % / +0.7 %).
+pub const RE_TRANSITION: f64 = 5000.0;
+
+/// Flow passes (L / U) a time-accurate run lets go by before it starts
+/// averaging, the shortest averaging time, and the most it runs, per quality.
+pub fn transient_passes(q: &GridQuality) -> (f64, f64, f64) {
+    match q {
+        GridQuality::Draft => (8.0, 8.0, 24.0),
+        GridQuality::Fine => (10.0, 15.0, 40.0),
+        _ => (10.0, 10.0, 30.0),
+    }
+}
+
+/// How a still part in a wind is solved, by its Reynolds number:
+///
+/// | Re | model | solver |
+/// |---|---|---|
+/// | < 300 | laminar | steady |
+/// | 300 – 5000 | k-ω SST | steady |
+/// | ≥ 5000 | k-ω SST + Langtry–Menter transition | steady |
+///
+/// Steady, because time-accurate runs measured no better on this machine
+/// (see the crate docs): unsteady RANS of a sphere settles to the steady
+/// answer; LES and SST-IDDES on meshes that run here in under an hour read
+/// 9–20 % high on a sphere and 31 % low on a flat plate.
+///
+/// `duration` (flow passes) asks for a time-accurate run instead: unsteady
+/// RANS with the same model, forces averaged once the start-up is over.
+/// It shows how much the force swings as the wake sheds, at several times
+/// the cost (cylinder at Re 2·10⁴: Cd within the steady answer's 4 %).
+///
+/// `h_surface` is the cell size on the part: it sets the time step.
+pub fn wind_method(re: f64, speed: f64, nu: f64, l: f64, h_surface: f64, q: &GridQuality, duration: Option<f64>) -> (Turbulence, Option<Transient>) {
+    if re < RE_STEADY {
+        return (Turbulence::Laminar, None);
+    }
+    let sst = freestream_sst(speed, nu);
+    let turbulence = if re >= RE_TRANSITION {
+        let (k, omega) = sst.k_omega().unwrap_or((0.0, 0.0));
+        Turbulence::KOmegaSstLm { k, omega, re_theta: re_theta_t(FREESTREAM_TU) }
+    } else {
+        sst
+    };
+    let Some(passes) = duration.filter(|d| d.is_finite() && *d > 0.0) else {
+        return (turbulence, None);
+    };
+    let flow_time = l / speed;
+    let (skip, min_avg, _) = transient_passes(q);
+    // a short run averages over its second half
+    let skip = skip.min(0.5 * passes);
+    // unsteady RANS: Courant 4 with two outer correctors per step
+    let max_co = 4.0;
+    // measured: the largest Courant number sits where the air speeds up past
+    // the part, about 2.3 × the wind speed through a surface cell
+    let dt_estimate = max_co * h_surface / (2.3 * speed);
+    let t = Transient {
+        init_iterations: 300,
+        flow_time,
+        end_time: passes * flow_time,
+        average_from: skip * flow_time,
+        min_average: min_avg.min(passes - skip) * flow_time,
+        max_co,
+        dt0: 0.02 * dt_estimate,
+        dt_estimate,
+        outer_correctors: 2,
+    };
+    (turbulence, Some(t))
+}
+
+/// Free-stream turbulence intensity at the inlet (calm air, a good tunnel).
+pub const FREESTREAM_TU: f64 = 0.005;
+
+/// Langtry–Menter transition-onset momentum-thickness Reynolds number in
+/// the free stream, for turbulence intensity `tu` (fraction), zero pressure
+/// gradient (Langtry & Menter 2009, eq. for Tu ≤ 1.3 %).
+pub fn re_theta_t(tu: f64) -> f64 {
+    let t = (tu * 100.0).max(0.027);
+    if t <= 1.3 { 1173.51 - 589.428 * t + 0.2196 / (t * t) } else { 331.5 * (t - 0.5658).powf(-0.671) }
+}
+
 /// Low free-stream turbulence: intensity 0.5 %, eddy viscosity = ν.
 fn freestream_sst(speed: f64, nu: f64) -> Turbulence {
-    let k = (1.5 * (0.005 * speed).powi(2)).max(1e-10);
+    let k = (1.5 * (FREESTREAM_TU * speed).powi(2)).max(1e-10);
     Turbulence::KOmegaSst { k, omega: k / nu }
 }
 

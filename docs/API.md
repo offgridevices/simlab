@@ -103,6 +103,15 @@ An accurate run keeps its OpenFOAM case for ParaView (`case_dir`, open
 final time step, the dictionaries, `Allrun`, `case.json`, the logs and
 `postProcessing/`. Deleting the run deletes it.
 
+Accurate (OpenFOAM) runs of a still part pick the turbulence model by the
+Reynolds number U·L/ν (L the part's largest size): laminar below 300, k-ω
+SST to 5000, k-ω SST with Langtry–Menter transition above (summary
+`turbulence`), all steady. A wind config with `duration` (flow passes over
+the part) asks for a time-accurate OpenFOAM run instead (summary `solver`,
+`averaged_flow_passes`, `drag_fluctuation_n`); spinning parts are always
+steady (MRF). Each engine labels its OpenFOAM/CalculiX containers with its
+data folder (`simlab.owner`), and at start and exit stops only its own.
+
 A spinning wind config may leave out `spin.center_mm`: the engine then uses
 the hub the model analysis found (`suggestions.prop.center_mm`), not the
 bounding-box centre (on a 3-blade prop the box centre is several mm off the
@@ -167,6 +176,9 @@ WindSummary = { kind: "wind", engine: "reference"|"native", method: "Accurate (O
   mlups?,                                         // GPU
   preview_cells_across?, quality_cells_across?,   // GPU
   iterations?, averaged_over?, turbulence?, y_plus?: [min, avg, max], moment_center_mm?,
+  solver?,                  // OpenFOAM: "steady (simpleFoam)" or "time-accurate (pimpleFoam), forces averaged over time"
+  averaged_flow_passes?,    // OpenFOAM time-accurate runs: averaging time in flow passes over the part (L/U)
+  drag_fluctuation_n?,      // OpenFOAM time-accurate runs: standard deviation of the drag over that time (N)
   case_dir?, case_bytes? }                        // OpenFOAM
 Accuracy = { method, checked_against, typical_error }   // "How sure" in the UI
 PropSummary = { kind: "prop", headline, blades, radius_mm, hub_radius_mm, rotation: "cw"|"ccw",

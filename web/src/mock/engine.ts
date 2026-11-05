@@ -167,7 +167,7 @@ function solve(rec: RunRec) {
     const { fields, summary: base, slices } = wind(mesh, mrec.model, cfg);
     const spin = !!(cfg.spin && cfg.spin.rpm > 0);
     const preview = rec.run.engine === "native";
-    const note = spin ? "Rough picture only: thrust can be 30–90% off (quick previews of a 3-inch prop read 32–50 g where OpenFOAM gets 345 g); use Accurate for numbers." : "Drag within about 3% on simple shapes at low Reynolds number, less certain above.";
+    const note = spin ? "Rough picture only: thrust can be 30–90% off (quick previews of a 3-inch prop read 32–50 g where OpenFOAM gets 345 g); use Accurate for numbers." : "Quick preview. On test shapes, drag is within about 5% for rounded bodies (sphere, Re 20 to 10,000) and reads about 10–15% low on sharp-edged plates. Lift, side force and anything that depends on thin boundary layers (airfoils, wings, small fins) are less certain, and can be off by 20% or more. Use the OpenFOAM test for numbers you will rely on.";
     // the preview reads differently from the accurate answer, as the real GPU tunnel does on propellers
     const k = preview && spin ? 0.62 : 1;
     const summary: WindSummary = preview

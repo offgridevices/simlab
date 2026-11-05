@@ -147,13 +147,14 @@ fn compare_with_native(app: &App, r: &RunRow, ours: &Value) -> Option<Value> {
 /// `.frd` text. CalculiX's own output streams into the run log and the
 /// progress line. Stopping the run kills the container.
 fn run_ccx(ctx: &Ctx, deck: &[u8], threads: usize) -> Result<String> {
-    let o = crate::system::reference_options();
+    let o = crate::system::reference_options(ctx.app);
     let name = format!("simlab-ccx-{}-{}", std::process::id(), ctx.run_id);
     let script = "cd /tmp && cat > job.inp && ccx -i job 2>&1 | tee ccx.log 1>&2; \
                   if [ ! -s job.frd ] || grep -q 'ERROR' ccx.log; then exit 3; fi; cat job.frd";
     let mut child = Command::new(&o.docker)
         .envs(o.env.iter().cloned())
-        .args(["run", "--rm", "-i", "--init", "--name", &name, "--label", "simlab=reference"])
+        .args(["run", "--rm", "-i", "--init", "--name", &name])
+        .args(simlab_reference::container_labels(&o))
         .args(simlab_fea::calculix::ccx_env(threads).into_iter().flat_map(|(k, v)| ["-e".to_string(), format!("{k}={v}")]))
         .args(["--entrypoint", "sh", &o.image, "-c", script])
         .stdin(Stdio::piped())
