@@ -50,8 +50,14 @@ def setup(threads: int) -> None:
     gmsh.option.setNumber("Mesh.MaxNumThreads3D", threads)
 
 
-def load(path: str, angle_deg: float, remesh: bool) -> str:
-    """Loads the part. Returns 'cad' or 'stl' (how its patches were made)."""
+def load(path: str, angle_deg: float, remesh: bool, geometry: bool = True) -> str:
+    """Loads the part. Returns 'cad' or 'stl' (how its patches were made).
+
+    geometry: build Gmsh geometry from a triangle file's patches (needed to
+    fill it with elements). Listing the patches does not need it, and a
+    smooth closed part (a sphere, some propellers) has patches Gmsh cannot
+    parametrize ("Wrong topology of boundary mesh for parametrization").
+    """
     if is_cad(path):
         gmsh.option.setNumber("Geometry.OCCFixDegenerated", 1)
         gmsh.option.setNumber("Geometry.OCCFixSmallEdges", 1)
@@ -84,8 +90,9 @@ def load(path: str, angle_deg: float, remesh: bool) -> str:
         remesh,  # forReparametrization (needed to remesh at a new size)
         math.pi,  # curveAngle
     )
-    gmsh.model.mesh.createGeometry()
-    gmsh.model.geo.synchronize()
+    if geometry or remesh:
+        gmsh.model.mesh.createGeometry()
+        gmsh.model.geo.synchronize()
     return "stl"
 
 
@@ -141,7 +148,7 @@ def patch_info(tag: int) -> dict:
 def cmd_surface(args) -> None:
     setup(args.threads)
     say(0.05, "Reading the part")
-    kind = load(args.input, args.angle, remesh=False)
+    kind = load(args.input, args.angle, remesh=False, geometry=False)
     patches = surface_patches()
     if kind == "cad":
         say(0.2, f"Turning {len(patches)} CAD faces into triangles")
