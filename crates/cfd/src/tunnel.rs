@@ -35,15 +35,15 @@
 //! i.e. lattice Mach 0.13 / 0.17, and is shortened further if the viscosity
 //! would push the relaxation time past 1.
 //!
-//! Averaging and convergence: the first 8 flow passes (3 revolutions in
-//! still air; at most 35 % of the run) are skipped. Forces, surface pressure
+//! Averaging and convergence: the first 35 % of the run (Draft 7 flow
+//! passes, Normal 14; 3 revolutions in still air) is skipped. Forces, surface pressure
 //! and slices are then averaged over a window; the run stops when the mean
 //! drag (spinning: thrust and torque) of the window's two halves agree to
 //! `tolerance` (|m2 - m1| / (|m1| + |m2|), default 0.5 %) and the
 //! statistical error of the window mean (from 8 block means) is below the
 //! same tolerance, after at least 10 passes (2 revolutions). If the halves
 //! still differ by more than 3x the tolerance and by far more than their
-//! noise (a real drift), the window restarts. Otherwise the run ends at
+//! noise about a straight-line trend (a real drift), the window restarts. Otherwise the run ends at
 //! the duration and `converged` is false.
 
 use crate::lattice::{FaceBc, Geometry, IDENTITY, Lattice, LatticeSetup, Probes, StepIn, Storage};
@@ -1057,9 +1057,12 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
     let omega_mag = norm(p.omega_lat);
     let ramp_steps = if p.spin { (opt.spin_ramp_revs * 2.0 * PI / omega_mag).ceil() as u64 } else { 0 };
     let unit_steps = p.steps_unit;
-    // wind: skip 8 flow passes, then average at least 10 (a chaotic wake at
-    // Re >= 1000 needs ~10+ passes per half-window for a ~2 % mean)
-    let (tr_units, min_win_units): (f64, f64) = if p.still { (3.0, 2.0) } else { (8.0, 10.0) };
+    // wind: skip the first 35 % of the run (Draft 7 passes, Normal 14), then
+    // average at least 10 (a chaotic wake at Re >= 1000 needs ~10+ passes
+    // per half-window for a ~2 % mean). A sharp-edged part's wake builds up
+    // for 15-20 passes: with 8 skipped at Normal a cube read 0.973 where its
+    // later passes give ~1.03, a square plate 1.102 for ~1.13
+    let (tr_units, min_win_units): (f64, f64) = if p.still { (3.0, 2.0) } else { (0.35 * p.duration, 10.0) };
     let mut w0 = (tr_units.min(0.35 * p.duration) * unit_steps) as u64;
     w0 = w0.max(ramp_steps + (0.5 * unit_steps) as u64);
     let min_win = (min_win_units.min(0.3 * p.duration) * unit_steps) as u64;
@@ -1164,8 +1167,14 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
                 let nbk = 8usize;
                 let bl = w.len() / nbk;
                 let bm: Vec<f64> = (0..nbk).map(|k| w[k * bl..(k + 1) * bl].iter().map(|v| signal(v, which)).sum::<f64>() / bl as f64).collect();
+                // the block means' scatter about their straight-line trend: a
+                // steady drift is not noise (a drifting window's plain
+                // scatter hid the drift and the window never restarted)
+                let xm = (nbk - 1) as f64 / 2.0;
                 let mm = bm.iter().sum::<f64>() / nbk as f64;
-                let sd = (bm.iter().map(|b| (b - mm) * (b - mm)).sum::<f64>() / (nbk - 1) as f64).sqrt();
+                let sxx: f64 = (0..nbk).map(|k| (k as f64 - xm).powi(2)).sum();
+                let slope = (0..nbk).map(|k| (k as f64 - xm) * (bm[k] - mm)).sum::<f64>() / sxx;
+                let sd = ((0..nbk).map(|k| (bm[k] - mm - slope * (k as f64 - xm)).powi(2)).sum::<f64>() / (nbk - 2) as f64).sqrt();
                 let se = sd / (nbk as f64).sqrt();
                 if sc > 0.0 {
                     worst = worst.max((m2 - m1).abs() / 2.0 / sc);
@@ -1182,7 +1191,9 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
             // slice sums restart now, so they cover the newest part of it);
             // never in the last 30 % of the run, so the final average keeps
             // a long window
-            if worst > 3.0 * opt.tolerance && trend && w.len() as u64 >= 2 * min_win && (step as f64) < 0.7 * total_steps as f64 {
+            // (it needed two minimum windows before, which a Draft or Normal
+            // run never reaches before 70 % of its length)
+            if worst > 3.0 * opt.tolerance && trend && w.len() as u64 >= min_win && (step as f64) < 0.7 * total_steps as f64 {
                 w0 += half as u64;
                 lat.reset_samples();
             }
