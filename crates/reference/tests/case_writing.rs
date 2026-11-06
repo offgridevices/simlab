@@ -276,3 +276,30 @@ fn spinning_parts_stay_steady() {
     let p = simlab_reference::plan::plan(&s, &cfg, 0.001).unwrap();
     assert!(p.transient.is_none() && p.kind == Kind::SpinHover);
 }
+
+#[test]
+fn slender_parts_are_meshed_across_their_thickness() {
+    use simlab_reference::plan::{THIN_ACCEPT, plan, thin_cells_target, thin_level};
+    // a 150 x 12 x 6 mm arm broadside to the wind
+    let mut arm = simlab_core::TriMesh::default();
+    let (lo, hi) = ([-0.003, -0.075, -0.006], [0.003, 0.075, 0.006]);
+    let c = |i: usize| [if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }];
+    arm.positions = (0..8).map(c).collect();
+    arm.triangles = vec![[0, 2, 3], [0, 3, 1], [4, 5, 7], [4, 7, 6], [0, 1, 5], [0, 5, 4], [2, 6, 7], [2, 7, 3], [0, 4, 6], [0, 6, 2], [1, 3, 7], [1, 7, 5]];
+    for q in [GridQuality::Draft, GridQuality::Normal] {
+        let p = plan(&arm, &wind(15.0, q.clone()), 0.001).unwrap();
+        eprintln!("arm {q:?}: surface level {:?}, {:.1} cells across the 12 mm", p.surface_level, p.cells_thin);
+        assert!((p.thin - 0.012).abs() < 1e-9);
+        assert!(p.cells_thin >= THIN_ACCEPT * thin_cells_target(&q) as f64);
+        assert!(p.warnings.iter().all(|w| !w.contains("thin across the wind")));
+    }
+    // a sphere keeps the quality's levels
+    let s = icosphere([0.0; 3], 0.01, 4);
+    let p = plan(&s, &wind(15.0, GridQuality::Draft), 0.001).unwrap();
+    assert_eq!(p.surface_level, (4, 5));
+    // background cells 30 mm, 12 mm thick: 12 cells (0.75 x 16) need 1 mm cells, level 5 (0.94 mm)
+    assert_eq!(thin_level(0.030, 0.012, 16), 5);
+    assert_eq!(thin_level(0.030, 0.012, 24), 6);
+    // a 20 mm sphere (background 4 mm) needs no more than its Draft level 4
+    assert!(thin_level(0.004, 0.020, 16) <= 4);
+}

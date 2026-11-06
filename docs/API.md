@@ -98,6 +98,19 @@ under half the accurate run's, and says so in a warning when it had to go
 coarser (`preview_cells_across` vs `quality_cells_across`). A custom grid
 size (`{type: "custom", cells_across}`) is kept as given.
 
+**Slender parts.** Both engines size a still part's grid from its largest
+size *and* its thinner size across the wind (`thin_mm`: a 150 × 12 × 6 mm
+arm broadside to the wind is 12 or 6 mm thick across it, not 150): the grid
+is refined until that size has 16 / 24 / 32 cells across it (Draft /
+Normal / Fine; summary and GPU estimate `cells_thin`), and the refinement
+round the part reaches a few times that size instead of the whole length.
+The refinement stops at the memory budget and at about what a compact part
+of the same quality costs (GPU: at most 8× the quality's cells across;
+OpenFOAM: at most 3 more surface levels, about 0.7 / 2 / 6 M planned cells),
+and a warning (GPU estimates: `thin_warning`) says so when that leaves fewer
+cells across than asked. A custom GPU grid is kept and warned about below
+8 cells across.
+
 An accurate run keeps its OpenFOAM case for ParaView (`case_dir`, open
 `case.foam`; `case_bytes` on disk), trimmed to the reconstructed mesh, the
 final time step, the dictionaries, `Allrun`, `case.json`, the logs and
@@ -175,6 +188,7 @@ WindSummary = { kind: "wind", engine: "reference"|"native", method: "Accurate (O
   preview_note?,                                  // quick previews: how rough, in one sentence
   mlups?,                                         // GPU
   preview_cells_across?, quality_cells_across?,   // GPU
+  thin_mm?, cells_thin?,                          // still parts: thinner size across the wind, grid cells across it
   iterations?, averaged_over?, turbulence?, y_plus?: [min, avg, max], moment_center_mm?,
   solver?,                  // OpenFOAM: "steady (simpleFoam)" or "time-accurate (pimpleFoam), forces averaged over time"
   averaged_flow_passes?,    // OpenFOAM time-accurate runs: averaging time in flow passes over the part (L/U)

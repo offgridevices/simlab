@@ -231,6 +231,8 @@ fn openfoam(ctx: &Ctx, r: &RunRow, cfg: &WindConfig, surf_m: &TriMesh, spin: boo
         "averaged_flow_passes": res.averaged_flow_passes,
         "drag_fluctuation_n": res.drag_fluctuation,
         "y_plus": res.y_plus,
+        "thin_mm": (!spin).then_some(res.thin_mm),
+        "cells_thin": (!spin).then_some(res.cells_thin),
         "warnings": warnings,
         "accuracy": if spin { accuracy("reference", true) } else { reference_still_accuracy(res.reynolds) },
         "case_dir": res.case_dir,
@@ -495,6 +497,7 @@ fn gpu_estimate(app: &App, surf_m: &TriMesh, cfg: &WindConfig) -> Result<Value> 
         "size": {"cells": e.cells}, "seconds": p.seconds,
         "note": note, "available": true,
         "cells_across": p.used, "quality_cells_across": p.asked,
+        "thin_mm": e.thin_mm, "cells_thin": e.cells_thin, "thin_warning": e.thin_warning,
     }))
 }
 
@@ -550,7 +553,9 @@ pub fn preview_plan(app: &App, cfg: &WindConfig, surf_m: &TriMesh) -> Result<Pre
     let slower = if spinning(cfg) { GPU_SLOWER_SPIN } else { GPU_SLOWER_STILL };
     let accurate_s = openfoam_estimate(app, surf_m, cfg).ok().and_then(|v| v["seconds"].as_f64());
     let target = accurate_s.map(|a| 0.5 * a).unwrap_or(PREVIEW_MAX_S).clamp(30.0, PREVIEW_MAX_S);
-    let asked = simlab_cfd::cells_across(&cfg.quality);
+    // the quality's cells across the part, or more for a slender still part
+    // (an arm broadside to the wind gets cells across its thickness)
+    let asked = simlab_cfd::planned_cells_across(cfg, surf_m, 0.001, budget, &simlab_cfd::SolverOptions { memory_budget: Some(budget), ..Default::default() })?;
     let custom = matches!(cfg.quality, GridQuality::Custom { .. });
     let mut n = asked;
     loop {

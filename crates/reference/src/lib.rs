@@ -167,6 +167,12 @@ pub struct WindReference {
     pub turbulence: String,
     /// y+ on the part (min, average, max), from OpenFOAM's yPlus function object
     pub y_plus: Option<[f64; 3]>,
+    /// still parts: the thinner size across the wind (mm) and the surface
+    /// mesh cells across it (spinning parts: 0)
+    #[serde(default)]
+    pub thin_mm: f64,
+    #[serde(default)]
+    pub cells_thin: f64,
     pub warnings: Vec<String>,
     /// pressure above ambient (Pa) at each vertex of the input surface
     pub surface_pressure: Vec<f32>,
@@ -619,6 +625,8 @@ pub fn run_openfoam_with(
         converged,
         turbulence: p.turbulence_name().into(),
         y_plus,
+        thin_mm: p.thin * 1e3,
+        cells_thin: p.cells_thin,
         warnings,
         surface_pressure,
         slices,

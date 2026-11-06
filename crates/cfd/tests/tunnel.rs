@@ -138,3 +138,37 @@ fn headline_numbers_use_significant_figures() {
     assert_eq!(sig(2.0, 3), "2.00");
     assert_eq!(sig(-0.0456, 2), "-0.046");
 }
+
+fn wind_cfg(q: GridQuality) -> WindConfig {
+    WindConfig { wind_dir: [1.0, 0.0, 0.0], speed_m_s: 15.0, air: Air::default(), spin: None, quality: q, duration: None }
+}
+
+#[test]
+fn slender_parts_get_cells_across_their_thickness() {
+    use simlab_cfd::shapes::{cuboid, sphere};
+    use simlab_cfd::{cells_for_thin, thin_cells_target};
+    // a 150 x 12 x 6 mm arm broadside to the wind: 12 mm thick across it
+    let arm = cuboid([-0.003, -0.075, -0.006], [0.003, 0.075, 0.006]);
+    for q in [GridQuality::Draft, GridQuality::Normal] {
+        let e = estimate(&wind_cfg(q.clone()), &arm, 1e-3, 32_000_000_000).unwrap();
+        eprintln!("arm {q:?}: {} across, {:.1} across the 12 mm, {}", e.cells_across, e.cells_thin, e.note);
+        assert!((e.thin_mm - 12.0).abs() < 0.01);
+        assert!(e.cells_thin >= thin_cells_target(&q) as f64 - 0.5, "{} cells across the thickness", e.cells_thin);
+        assert!(e.thin_warning.is_none());
+    }
+    // a sphere is not slender: the quality's grid, unchanged
+    let ball = sphere([0.0; 3], 0.01, 4);
+    let e = estimate(&wind_cfg(GridQuality::Draft), &ball, 1e-3, 32_000_000_000).unwrap();
+    assert_eq!(e.cells_across, 64);
+    // a small memory budget caps the refinement, and the estimate says so
+    let e = estimate(&wind_cfg(GridQuality::Normal), &arm, 1e-3, 600_000_000).unwrap();
+    eprintln!("arm Normal in 0.6 GB: {:.1} across the 12 mm: {:?}", e.cells_thin, e.thin_warning);
+    assert!(e.cells_thin < 24.0 && e.thin_warning.is_some() && e.memory_bytes <= 600_000_000);
+    // a custom grid is the caller's choice: kept, with a warning when too coarse
+    let e = estimate(&wind_cfg(GridQuality::Custom { cells_across: 64 }), &arm, 1e-3, 32_000_000_000).unwrap();
+    assert_eq!(e.cells_across, 64);
+    assert!(e.thin_warning.is_some());
+    assert_eq!(cells_for_thin(64, 16, 0.15, 0.012), 200);
+    assert_eq!(cells_for_thin(64, 16, 0.02, 0.02), 64);
+    assert_eq!(cells_for_thin(64, 16, 1.0, 0.001), 64 * simlab_cfd::THIN_MAX_BOOST);
+}

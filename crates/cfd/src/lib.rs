@@ -46,6 +46,6 @@ pub mod voxel;
 pub use gpu::gpu_info;
 pub use lattice::Storage;
 pub use tunnel::{
-    Estimate, FlowSlice, SliceField, SolverOptions, WindResult, WindSummary, cells_across, default_duration, estimate, estimate_with, finest_fit, finest_fit_with, max_cells_layout, run,
+    Estimate, FlowSlice, THIN_MAX_BOOST, cells_for_thin, thin_cells_target, thin_cost_cap, SliceField, SolverOptions, WindResult, WindSummary, cells_across, default_duration, estimate, estimate_with, finest_fit, finest_fit_with, max_cells_layout, planned_cells_across, run,
     run_with,
 };

@@ -293,6 +293,12 @@ pub struct WindSummary {
     pub time_unit: String,
     /// dynamic pressure used for Cp
     pub q_ref_pa: f64,
+    /// still parts: the part's thinner size across the wind (mm) and the
+    /// grid cells across it (a long arm broadside: its thickness)
+    #[serde(default)]
+    pub thin_mm: f64,
+    #[serde(default)]
+    pub cells_thin: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -318,6 +324,14 @@ pub struct Estimate {
     pub steps: u64,
     pub seconds: f64,
     pub note: String,
+    /// still parts: the part's thinner size across the wind (mm), the grid
+    /// cells across it, and a warning when it has fewer than the quality asks
+    #[serde(default)]
+    pub thin_mm: f64,
+    #[serde(default)]
+    pub cells_thin: f64,
+    #[serde(default)]
+    pub thin_warning: Option<String>,
 }
 
 /// Everything derived from the config before touching the GPU.
@@ -358,7 +372,72 @@ struct Plan {
     multi: Option<MultiPlan>,
     /// cell updates per finest time step (all levels)
     updates_per_step: f64,
+    /// a slender still part: how its grid was sized from its thinner size
+    thin: Option<ThinSizing>,
+    /// the part's thinner size across the wind (m)
+    d_thin: f64,
 }
+
+#[derive(Clone, Copy, Debug)]
+struct ThinSizing {
+    /// cells across the thinner size the quality asks for
+    target: u32,
+    /// cells across the largest size that would give them
+    wanted: u32,
+}
+
+impl Plan {
+    /// cell updates for the whole run (all levels): what sets its time
+    fn cost(&self) -> f64 {
+        self.updates_per_step * (self.duration * self.steps_unit).ceil()
+    }
+    /// cells across the part's thinner size across the wind
+    fn cells_thin(&self) -> f64 {
+        self.d_thin / self.dx
+    }
+}
+
+/// Cells across a still part's thinner size across the wind, per quality
+/// (a long arm broadside to the wind: its thickness). The grid is refined
+/// past the quality's cells across the largest size until it has these,
+/// within the memory budget and [`thin_cost_cap`].
+pub fn thin_cells_target(q: &GridQuality) -> u32 {
+    match q {
+        GridQuality::Draft => 16,
+        GridQuality::Normal => 24,
+        GridQuality::Fine => 32,
+        GridQuality::Custom { .. } => 0,
+    }
+}
+
+/// Cells across the largest size that give `n_thin` across `thin` (never
+/// fewer than the quality's `n_q`, at most [`THIN_MAX_BOOST`] times it).
+pub fn cells_for_thin(n_q: u32, n_thin: u32, l_ref: f64, thin: f64) -> u32 {
+    if thin <= 0.0 || l_ref <= 0.0 {
+        return n_q;
+    }
+    let want = (n_thin as f64 * l_ref / thin).ceil() as u32;
+    want.clamp(n_q, n_q.saturating_mul(THIN_MAX_BOOST))
+}
+
+/// A slender part's grid is refined at most this many times finer than the
+/// quality's.
+pub const THIN_MAX_BOOST: u32 = 8;
+
+/// The most cell updates (all levels, whole run) a slender part's refined
+/// grid may cost: about what a compact part (a sphere) costs at that
+/// quality, so Draft stays a few minutes and Normal under an hour on an
+/// M4 Max ([`MLUPS_REFINED`]).
+pub fn thin_cost_cap(q: &GridQuality) -> f64 {
+    match q {
+        GridQuality::Draft => 4.0e11,
+        GridQuality::Normal => 4.0e12,
+        _ => 2.0e13,
+    }
+}
+/// Refinement boxes round a slender part reach this many times its
+/// thinner size (instead of its full frontal size).
+const REFINE_THIN: f64 = 2.0;
 
 #[derive(Clone, Debug)]
 struct MultiPlan {
@@ -502,9 +581,41 @@ fn plan(cfg: &WindConfig, m: &TriMesh, unit_m: f64, opt: &SolverOptions, budget:
     if l_ref <= 0.0 {
         bail!("the part has no size");
     }
-    let n_across = opt.cells_across.unwrap_or_else(|| cells_across(&cfg.quality));
+    // a still part's thinner size across the wind (a long arm broadside to
+    // the wind: its thickness, not its length, sets the wake)
+    let d_thin = if spin.is_none() { ext[1].min(ext[2]).max(l_ref * 1e-3) } else { l_ref };
+    let n_across = match opt.cells_across {
+        Some(n) => n,
+        None => {
+            let n_q = cells_across(&cfg.quality);
+            let n_t = thin_cells_target(&cfg.quality);
+            let want = cells_for_thin(n_q, n_t, l_ref, d_thin);
+            if want > n_q {
+                // the finest grid up to `want` that fits the memory budget and
+                // the time cap (cells across, tried coarser by ~8 % a step)
+                let budget = budget.or(opt.memory_budget);
+                let base = plan(cfg, m, unit_m, &SolverOptions { cells_across: Some(n_q), ..opt.clone() }, budget)?;
+                let t_cap = thin_cost_cap(&cfg.quality).max(base.cost());
+                let mut n = want;
+                loop {
+                    let p = plan(cfg, m, unit_m, &SolverOptions { cells_across: Some(n), ..opt.clone() }, budget)?;
+                    let fits = budget.is_none_or(|b| p.memory <= b) && p.cost() <= t_cap;
+                    if fits || n <= n_q {
+                        let mut p = if fits { p } else { base };
+                        p.thin = Some(ThinSizing { target: n_t, wanted: want });
+                        return Ok(p);
+                    }
+                    n = ((n as f64 * 0.92) as u32).max(n_q);
+                }
+            }
+            n_q
+        }
+    };
     let dx = l_ref / n_across as f64;
     let d_front = if still { 2.0 * rotor_radius } else { ext[1].max(ext[2]) }.max(l_ref * 1e-3);
+    // refinement boxes scale with the wake: the part's thinner size across
+    // the wind, at most its frontal size (a sphere or plate: unchanged)
+    let d_box = if spin.is_none() { d_front.min(REFINE_THIN * d_thin) } else { d_front };
     let mg = if still { &opt.still_margins } else { &opt.wind_margins };
     let dom_lo = [lo[0] - mg.upstream * d_front, lo[1] - mg.side * d_front, lo[2] - mg.side * d_front];
     let dom_hi = [hi[0] + mg.downstream * d_front, hi[1] + mg.side * d_front, hi[2] + mg.side * d_front];
@@ -535,7 +646,7 @@ fn plan(cfg: &WindConfig, m: &TriMesh, unit_m: f64, opt: &SolverOptions, budget:
             let mut cells = vec![dims0.iter().map(|&d| d as u64).product::<u64>()];
             for l in 1..nl {
                 let sc = (1u64 << (nl - l)) as f64; // finest cells per level (l-1) cell
-                let df = d_front / dx / sc;
+                let df = d_box / dx / sc;
                 let (eu, ed, es) = REFINE_EXT[l - 1];
                 let e_lo = [eu * df, es * df, es * df];
                 let e_hi = [ed * df, es * df, es * df];
@@ -678,6 +789,8 @@ fn plan(cfg: &WindConfig, m: &TriMesh, unit_m: f64, opt: &SolverOptions, budget:
             None => dims.iter().map(|&d| d as f64).product(),
         },
         multi,
+        thin: None,
+        d_thin,
     })
 }
 
@@ -717,7 +830,29 @@ pub fn estimate_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, bud
         if p.still { "revolutions" } else { "flow passes" }
     );
     let _ = mlups;
-    Ok(Estimate { fits, cells, grid: p.dims, cells_across: p.cells_across, memory_bytes: p.memory, budget_bytes, storage: p.storage, steps, seconds, note })
+    Ok(Estimate {
+        fits,
+        cells,
+        grid: p.dims,
+        cells_across: p.cells_across,
+        memory_bytes: p.memory,
+        budget_bytes,
+        storage: p.storage,
+        steps,
+        seconds,
+        note,
+        thin_mm: if p.spin { 0.0 } else { p.d_thin * 1e3 },
+        cells_thin: if p.spin { 0.0 } else { p.cells_thin() },
+        thin_warning: thin_warning(&p),
+    })
+}
+
+/// Cells across the part's largest size a run of `cfg` uses when the caller
+/// does not set them: the quality's, or more for a slender still part (see
+/// [`thin_cells_target`]), within `budget_bytes` and the time cap.
+pub fn planned_cells_across(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, budget_bytes: u64, opt: &SolverOptions) -> Result<u32> {
+    let o = SolverOptions { cells_across: None, ..opt.clone() };
+    Ok(plan(cfg, surface, model_unit_m, &o, Some(budget_bytes))?.cells_across)
 }
 
 /// The finest cells-across that fits the budget (FP16 storage allowed).
@@ -1158,6 +1293,9 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
     if p.blockage > 0.06 {
         warnings.push(format!("The part fills {:.1}% of the tunnel's cross-section, so drag may read a little high.", p.blockage * 100.0));
     }
+    if let Some(w) = thin_warning(&p) {
+        warnings.push(w);
+    }
     let tau0 = 0.5 + 3.0 * p.nu_lat;
     let wall_cells_re = if p.spin { reynolds } else { speed * p.dx / cfg.air.kinematic_viscosity };
     if tau0 < 0.502 && wall_cells_re > 300.0 {
@@ -1220,8 +1358,36 @@ pub fn run_with(cfg: &WindConfig, surface: &TriMesh, model_unit_m: f64, opt: &So
         simulated,
         time_unit: if p.still { "revolutions".into() } else { "passes".into() },
         q_ref_pa: q_ref,
+        thin_mm: if p.spin { 0.0 } else { p.d_thin * 1e3 },
+        cells_thin: if p.spin { 0.0 } else { p.cells_thin() },
     };
     Ok(WindResult { summary, surface_pressure_pa, surface_cp, slices: out_slices, history: history_out })
+}
+
+/// A still part with too few cells across its thinner size: the grid was
+/// capped (memory, time, or the most it may be refined), or a custom grid.
+fn thin_warning(p: &Plan) -> Option<String> {
+    if p.spin {
+        return None;
+    }
+    let have = p.cells_thin();
+    let thin_mm = p.d_thin * 1e3;
+    match p.thin {
+        Some(t) if have + 0.5 < t.target as f64 => Some(format!(
+            "This part is thin across the wind ({} mm), and the grid has only {:.0} cells across it instead of the {} this detail setting asks for (it would need {} cells across the whole part; memory and run time allow {}), so its drag is less certain.",
+            sig(thin_mm, 2),
+            have,
+            t.target,
+            t.wanted,
+            p.cells_across
+        )),
+        None if have < 8.0 => Some(format!(
+            "This part is thin across the wind ({} mm) and the grid has only {:.0} cells across it, so its drag is rough; a finer grid would be more accurate.",
+            sig(thin_mm, 2),
+            have
+        )),
+        _ => None,
+    }
 }
 
 /// `x` with `n` significant figures, plain decimal notation (no exponent).

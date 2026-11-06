@@ -20,7 +20,12 @@
 //! outlet: fixed pressure; sides: slip walls (a wind tunnel without
 //! boundary layers on its walls). Background cells are L/5; the surface
 //! is refined to L/80 (Draft), L/160 (Normal) or L/320 (Fine), with finer
-//! cells where it curves sharply.
+//! cells where it curves sharply. A slender part (a long arm broadside to
+//! the wind) is refined further until its thinner size across the wind has
+//! about 16 / 24 / 32 cells (at least 75 % of that; at most 3 more levels
+//! and about 0.7 / 2 / 6 M planned cells, with a warning when that is not
+//! enough), and its refinement regions reach a few times that thickness
+//! instead of its whole length.
 //!
 //! **Spinning part in still air** (spin, speed 0: a hovering propeller). The
 //! proven setup from the user's 3-inch propeller study (OpenFOAM v2506,
@@ -195,6 +200,10 @@ pub struct Plan {
     pub reynolds: f64,
     /// plain-words notes found while planning
     pub warnings: Vec<String>,
+    /// still parts: the thinner size across the wind (m) and the surface
+    /// cells across it (spinning parts: 0)
+    pub thin: f64,
+    pub cells_thin: f64,
 }
 
 impl Plan {
@@ -363,6 +372,8 @@ pub fn plan(surface: &TriMesh, cfg: &WindConfig, model_unit_m: f64) -> anyhow::R
             ref_length: 2.0 * r,
             reynolds,
             warnings,
+            thin: 0.0,
+            cells_thin: 0.0,
         });
     }
 
@@ -384,28 +395,43 @@ pub fn plan(surface: &TriMesh, cfg: &WindConfig, model_unit_m: f64) -> anyhow::R
             ((s, s + 1), 3, 2000)
         }
     };
+    // a slender part (a long arm broadside to the wind): its thinner size
+    // across the wind sets the wake, so the surface is refined until that
+    // size has the quality's cells across it, as far as the cell cap allows
+    let thin = (ehi[1] - elo[1]).min(ehi[2] - elo[2]).max(l * 1e-3);
+    let d_box = l.min(REFINE_THIN * thin);
+    let thin_target = thin_cells_target(q);
+    let mut surface_level = surface_level;
+    let mut thin_capped = false;
+    if thin_target > 0 {
+        let want = thin_level(h0, thin, thin_target).min(surface_level.0 + THIN_MAX_LEVELS);
+        while surface_level.0 < want {
+            let next = (surface_level.0 + 1, surface_level.1 + 1);
+            let cells = estimate_wind_cells(surface, h0, cells, next.0, &wind_regions(&frame, center, elo, ehi, d_box, next.0));
+            if cells > thin_cell_cap(q) {
+                thin_capped = true;
+                break;
+            }
+            surface_level = next;
+        }
+        if surface_level.0 < want && !thin_capped {
+            thin_capped = true;
+        }
+    }
+    let cells_thin = thin / (h0 / f64::powi(2.0, surface_level.0 as i32));
+    if thin_capped && cells_thin < THIN_ACCEPT * thin_target as f64 {
+        warnings.push(format!(
+            "This part is thin across the wind ({:.3} mm), and the mesh has only {:.0} cells across it instead of the {} this detail setting asks for (a finer mesh would not fit the time and memory limits), so its drag is less certain.",
+            thin * 1e3,
+            cells_thin,
+            thin_target
+        ));
+    }
     // above Re 300 the wall is resolved at every quality (the transition
     // model needs the laminar layer; SST at Re 1000 too: +1.5 % with layers
     // at Draft, +2.4 % without)
     let layers = if speed * l / nu >= RE_STEADY { layers.max(3) } else { layers };
-    let n = surface_level.0;
-    let regions = vec![
-        Region::NearPart { levels: vec![(0.15 * l, n.saturating_sub(1).max(1)), (0.5 * l, n.saturating_sub(2).max(1))] },
-        Region::Cylinder {
-            name: "wake".into(),
-            p1: frame.to_model(center, [elo[0] - 0.2 * l, 0.0, 0.0]),
-            p2: frame.to_model(center, [ehi[0] + 2.5 * l, 0.0, 0.0]),
-            radius: 0.5 * (ehi[1] - elo[1]).max(ehi[2] - elo[2]) + 0.3 * l,
-            level: n.saturating_sub(2).max(1),
-        },
-        Region::Cylinder {
-            name: "farWake".into(),
-            p1: frame.to_model(center, [elo[0] - 0.5 * l, 0.0, 0.0]),
-            p2: frame.to_model(center, [ehi[0] + 6.0 * l, 0.0, 0.0]),
-            radius: 0.5 * (ehi[1] - elo[1]).max(ehi[2] - elo[2]) + 0.6 * l,
-            level: n.saturating_sub(3).max(1),
-        },
-    ];
+    let regions = wind_regions(&frame, center, elo, ehi, d_box, surface_level.0);
     let reynolds = speed * l / nu;
     let h_surface = h0 / f64::powi(2.0, surface_level.0 as i32);
     let (turbulence, transient) = wind_method(reynolds, speed, nu, l, h_surface, q, cfg.duration);
@@ -440,8 +466,81 @@ pub fn plan(surface: &TriMesh, cfg: &WindConfig, model_unit_m: f64) -> anyhow::R
         ref_length: l,
         reynolds,
         warnings,
+        thin,
+        cells_thin,
     })
 }
+
+/// Refinement round a still part with surface level `n`: near the part
+/// (within 0.15 and 0.5 of `d_box`), a wake cylinder 2.5 `d_box` long and
+/// a far wake 6 `d_box` long. `d_box` is the part's largest size `l`, or
+/// for a slender part twice its thinner size across the wind (the wake's
+/// size), so a long arm is not wrapped in metres of fine cells.
+fn wind_regions(frame: &Frame, center: Vec3, elo: Vec3, ehi: Vec3, d_box: f64, n: u32) -> Vec<Region> {
+    let half_width = 0.5 * (ehi[1] - elo[1]).max(ehi[2] - elo[2]);
+    vec![
+        Region::NearPart { levels: vec![(0.15 * d_box, n.saturating_sub(1).max(1)), (0.5 * d_box, n.saturating_sub(2).max(1))] },
+        Region::Cylinder {
+            name: "wake".into(),
+            p1: frame.to_model(center, [elo[0] - 0.2 * d_box, 0.0, 0.0]),
+            p2: frame.to_model(center, [ehi[0] + 2.5 * d_box, 0.0, 0.0]),
+            radius: half_width + 0.3 * d_box,
+            level: n.saturating_sub(2).max(1),
+        },
+        Region::Cylinder {
+            name: "farWake".into(),
+            p1: frame.to_model(center, [elo[0] - 0.5 * d_box, 0.0, 0.0]),
+            p2: frame.to_model(center, [ehi[0] + 6.0 * d_box, 0.0, 0.0]),
+            radius: half_width + 0.6 * d_box,
+            level: n.saturating_sub(3).max(1),
+        },
+    ]
+}
+
+/// Cells across a still part's thinner size across the wind the surface
+/// mesh is refined to, per quality (0: no rule, a custom size is kept).
+/// The same numbers as the GPU tunnel's (`simlab_cfd::thin_cells_target`).
+pub fn thin_cells_target(q: &GridQuality) -> u32 {
+    match q {
+        GridQuality::Draft => 16,
+        GridQuality::Normal => 24,
+        GridQuality::Fine => 32,
+        GridQuality::Custom { .. } => 0,
+    }
+}
+
+/// The coarsest surface level that puts at least [`THIN_ACCEPT`] × `n`
+/// cells across `thin` (levels halve the cell, so asking for all `n` would
+/// often double them).
+pub fn thin_level(h0: f64, thin: f64, n: u32) -> u32 {
+    if n == 0 || thin <= 0.0 {
+        return 0;
+    }
+    (h0 * THIN_ACCEPT * n as f64 / thin).log2().ceil().clamp(0.0, 12.0) as u32
+}
+
+/// A slender part's mesh counts as fine enough with this share of the
+/// cells across its thinner size the quality asks for.
+pub const THIN_ACCEPT: f64 = 0.75;
+
+/// A slender part's surface is refined at most this many levels past the
+/// quality's own.
+pub const THIN_MAX_LEVELS: u32 = 3;
+
+/// Planned cells (`estimate_cells`) a slender part's refined mesh may
+/// reach: about what a compact part gets at the quality, in final cells
+/// 1.3-2x more (Draft about 1 M, Normal 3 M, Fine 10 M).
+pub fn thin_cell_cap(q: &GridQuality) -> u64 {
+    match q {
+        GridQuality::Draft => 700_000,
+        GridQuality::Normal => 2_000_000,
+        _ => 6_000_000,
+    }
+}
+
+/// Refinement regions round a slender part reach this many times its
+/// thinner size across the wind (instead of its largest size).
+const REFINE_THIN: f64 = 2.0;
 
 /// Below this Reynolds number (U L / ν) the flow round a still part is
 /// steady and laminar (a sphere's wake starts to shed above Re ≈ 270).
@@ -566,22 +665,28 @@ fn level_for(h0: f64, target: f64) -> u32 {
 /// shell of surface cells (area / h²) times the cells between levels, plus
 /// the refinement regions' volumes.
 pub fn estimate_cells(p: &Plan, surface: &TriMesh) -> u64 {
-    let area: f64 = (0..surface.triangles.len()).map(|t| surface.triangle_area(t)).sum();
-    let mut total = p.background_cells() as f64;
-    let hs = p.surface_cell();
-    // surface shell: ~4 cells deep at the surface level, then 3 per level outwards
-    total += 4.0 * area / (hs * hs);
-    for reg in &p.regions {
-        if let Region::Cylinder { p1, p2, radius, level, .. } = reg {
-            let h = p.h0 / f64::powi(2.0, *level as i32);
-            let v = std::f64::consts::PI * radius * radius * norm(sub(*p2, *p1));
-            total += v / (h * h * h) * 0.8;
-        }
-    }
+    let mut total = estimate_wind_cells(surface, p.h0, p.cells, p.surface_level.0, &p.regions) as f64;
     if let Some(r) = &p.rotor {
         let h = p.h0 / f64::powi(2.0, r.level as i32);
         let v = std::f64::consts::PI * r.zone_radius.powi(2) * norm(sub(r.zone_p2, r.zone_p1));
         total += 0.3 * v / (h * h * h);
+    }
+    total as u64
+}
+
+/// `estimate_cells` without the rotor zone, from the pieces of a plan.
+fn estimate_wind_cells(surface: &TriMesh, h0: f64, cells: [u32; 3], surface_level: u32, regions: &[Region]) -> u64 {
+    let area: f64 = (0..surface.triangles.len()).map(|t| surface.triangle_area(t)).sum();
+    let mut total = cells.iter().map(|&n| n as f64).product::<f64>();
+    let hs = h0 / f64::powi(2.0, surface_level as i32);
+    // surface shell: ~4 cells deep at the surface level, then 3 per level outwards
+    total += 4.0 * area / (hs * hs);
+    for reg in regions {
+        if let Region::Cylinder { p1, p2, radius, level, .. } = reg {
+            let h = h0 / f64::powi(2.0, *level as i32);
+            let v = std::f64::consts::PI * radius * radius * norm(sub(*p2, *p1));
+            total += v / (h * h * h) * 0.8;
+        }
     }
     total as u64
 }
