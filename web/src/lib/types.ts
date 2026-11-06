@@ -268,6 +268,20 @@ export interface Estimate {
   docker_ready?: boolean;
   /** wind tunnel tests: both engines' estimates, to show next to each choice */
   engines?: Partial<Record<Engine, Estimate>>;
+  /** still wind tunnel tests: whether the part is rounded where the air leaves it */
+  rounded_part?: RoundedPart | null;
+}
+
+/** A still part rounded where the air leaves it (ball, dome, round rod
+ * across the wind) reads 9–26% low in OpenFOAM above Reynolds number
+ * 10,000; the GPU tunnel comes closer there. */
+export interface RoundedPart {
+  rounded: boolean;
+  /** share of the part's outline, seen from upwind, that is rounded (0–1) */
+  rounded_share: number;
+  reynolds: number;
+  /** plain-words advice when it matters at this speed, else null */
+  advice?: string | null;
 }
 
 // ---------------------------------------------------------------- runs and results
@@ -355,6 +369,8 @@ export interface WindSummary {
   method?: string;
   /** quick previews: how rough the numbers are, in one sentence */
   preview_note?: string | null;
+  /** still parts: rounded where the air leaves it? (the advice is also in `warnings`) */
+  rounded_part?: RoundedPart | null;
   thrust_g?: number | null;
   rpm?: number | null;
   /** OpenFOAM */

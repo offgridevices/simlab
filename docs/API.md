@@ -111,6 +111,19 @@ and a warning (GPU estimates: `thin_warning`) says so when that leaves fewer
 cells across than asked. A custom GPU grid is kept and warned about below
 8 cells across.
 
+**Rounded parts.** Which engine reads a still part's drag more truly
+depends on its shape (docs/VALIDATION.md). Where the air leaves a rounded
+part (ball, dome, round rod across the wind) OpenFOAM's steady model reads
+9–26% low above Reynolds number 10,000 and the GPU tunnel within about
+3–11%; on flat and sharp-edged parts OpenFOAM is the better one. Wind
+estimates and still-part results carry `rounded_part: { rounded,
+rounded_share, reynolds, advice }`: `rounded_share` is how much of the
+part's outline, seen from upwind, is rounded (rounded at 0.5 or more; a
+thin curved blade counts as sharp), `reynolds` goes by the part's
+thickness across the wind, and `advice` (null when it does not matter) is
+the plain-words note: on an OpenFOAM result it suggests the quick preview,
+and it is also the first warning. OpenFOAM stays the default engine.
+
 An accurate run keeps its OpenFOAM case for ParaView (`case_dir`, open
 `case.foam`; `case_bytes` on disk), trimmed to the reconstructed mesh, the
 final time step, the dictionaries, `Allrun`, `case.json`, the logs and
@@ -138,7 +151,8 @@ propeller runs (under a second) have their own queue.
 ```
 Estimate = { fits, memory_bytes, budget_bytes, size: { elements?, nodes?, dofs?, cells? }, seconds, note,
              engine?, label?, available?, docker_ready?,
-             engines?: { reference: Estimate, native: Estimate } }   // wind tunnel: both, for the choice
+             engines?: { reference: Estimate, native: Estimate },    // wind tunnel: both, for the choice
+             rounded_part?: { rounded, rounded_share, reynolds, advice? } | null }   // still wind tests
 ```
 For OpenFOAM `budget_bytes` is Docker's memory and `cells` the expected final
 mesh; time and memory are calibrated on the validation runs (see
@@ -189,6 +203,7 @@ WindSummary = { kind: "wind", engine: "reference"|"native", method: "Accurate (O
   mlups?,                                         // GPU
   preview_cells_across?, quality_cells_across?,   // GPU
   thin_mm?, cells_thin?,                          // still parts: thinner size across the wind, grid cells across it
+  rounded_part?: { rounded, rounded_share, reynolds, advice? },   // still parts: see "Rounded parts"
   iterations?, averaged_over?, turbulence?, y_plus?: [min, avg, max], moment_center_mm?,
   solver?,                  // OpenFOAM: "steady (simpleFoam)" or "time-accurate (pimpleFoam), forces averaged over time"
   averaged_flow_passes?,    // OpenFOAM time-accurate runs: averaging time in flow passes over the part (L/U)

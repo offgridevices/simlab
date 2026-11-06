@@ -12,6 +12,7 @@ mod models;
 mod solve;
 mod state;
 mod system;
+mod shape;
 mod wind;
 mod calculix;
 

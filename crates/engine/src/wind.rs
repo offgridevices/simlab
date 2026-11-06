@@ -134,6 +134,27 @@ pub fn reference_still_accuracy(re: f64) -> Value {
     }
 }
 
+/// Is this still part rounded where the air leaves it, and what that means
+/// for `engine`'s number at this speed (docs/VALIDATION.md: OpenFOAM reads
+/// rounded parts 9–26% low above Reynolds number 10,000, the GPU tunnel
+/// within about 3–11%). Null for spinning parts. Its Reynolds number goes
+/// by the part's thickness across the wind.
+pub fn rounded_part(surf_m: &TriMesh, cfg: &WindConfig, engine: &str) -> Value {
+    if spinning(cfg) || cfg.speed_m_s <= 0.0 {
+        return Value::Null;
+    }
+    let o = crate::shape::outline(surf_m, cfg.wind_dir);
+    // by the thickness across the wind: a round rod's flow goes by its
+    // diameter, not its length (surf_m is in metres)
+    let reynolds = cfg.speed_m_s * o.thickness / cfg.air.kinematic_viscosity;
+    json!({
+        "rounded": o.rounded(),
+        "rounded_share": o.rounded_share,
+        "reynolds": reynolds,
+        "advice": crate::shape::rounded_advice(&o, reynolds, engine),
+    })
+}
+
 // ------------------------------------------------------------------ runs
 
 pub fn run(ctx: &Ctx, r: &RunRow, model: &ModelRow, cfg: &WindConfig) -> Result<Outcome> {
@@ -190,6 +211,10 @@ fn openfoam(ctx: &Ctx, r: &RunRow, cfg: &WindConfig, surf_m: &TriMesh, spin: boo
     )?;
 
     warnings.extend(res.warnings.iter().cloned());
+    let rounded = rounded_part(surf_m, cfg, "reference");
+    if let Some(a) = rounded["advice"].as_str() {
+        warnings.insert(0, a.to_string());
+    }
     let rpm = cfg.spin.map(|s| s.rpm.abs()).unwrap_or(0.0);
     let (headline, short) = match (res.thrust_n, res.torque_nm, res.power_w) {
         (Some(t), Some(q), Some(p)) if spin => (
@@ -231,6 +256,7 @@ fn openfoam(ctx: &Ctx, r: &RunRow, cfg: &WindConfig, surf_m: &TriMesh, spin: boo
         "averaged_flow_passes": res.averaged_flow_passes,
         "drag_fluctuation_n": res.drag_fluctuation,
         "y_plus": res.y_plus,
+        "rounded_part": rounded,
         "thin_mm": (!spin).then_some(res.thin_mm),
         "cells_thin": (!spin).then_some(res.cells_thin),
         "warnings": warnings,
@@ -304,6 +330,11 @@ fn gpu(ctx: &Ctx, cfg: &WindConfig, surf_m: &TriMesh, spin: bool, mut warnings: 
         warnings.insert(1, w);
     }
     warnings.extend(res.summary.warnings.iter().cloned());
+    let rounded = rounded_part(surf_m, cfg, "native");
+    if let Some(a) = rounded["advice"].as_str() {
+        warnings.insert(1, a.to_string());
+    }
+    summary["rounded_part"] = rounded;
     summary["preview_cells_across"] = json!(plan.used);
     summary["quality_cells_across"] = json!(plan.asked);
     summary["warnings"] = json!(warnings);
@@ -477,6 +508,8 @@ pub fn estimate(app: &App, m: &ModelRow, cfg: &WindConfig, engine: &str) -> Resu
     let gp = gpu_estimate(app, &surf_m, cfg).unwrap_or_else(|e| unavailable(&format!("{e:#}")));
     let mut top = if engine == "native" { gp.clone() } else { of.clone() };
     top["engines"] = json!({"reference": of, "native": gp});
+    // what the engine picker should say about a rounded part
+    top["rounded_part"] = rounded_part(&surf_m, cfg, "reference");
     Ok(top)
 }
 

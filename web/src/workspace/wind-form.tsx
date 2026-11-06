@@ -40,13 +40,13 @@ export const WIND_ENGINES: { id: Engine; label: string; icon: React.ReactNode; d
     id: "reference",
     label: "Accurate",
     icon: <GaugeIcon />,
-    detail: "OpenFOAM in Docker, on the processor. The numbers to trust: propeller thrust within about 3%, drag on simple shapes within about 1%.",
+    detail: "OpenFOAM in Docker, on the processor. The numbers to trust for most drone parts: flat or sharp-edged parts within about 1–8%, propeller thrust within about 3%. Rounded parts in fast air read low.",
   },
   {
     id: "native",
     label: "Quick preview",
     icon: <ZapIcon />,
-    detail: "On the graphics chip, for a first look at the flow. Drag within about 3% on simple shapes; a spinning part's thrust can be 30–90% off.",
+    detail: "On the graphics chip, for a first look at the flow. Rounded parts within about 3–11%; flat and sharp-edged parts read 12–30% low on its quick grid. A spinning part's thrust can be 30–90% off.",
   },
 ];
 
@@ -193,6 +193,11 @@ export function WindSteps({ config: c, set, model, step, setStep, estimate, engi
           ))}
         </ToggleGroup>
         <p className="text-xs text-muted-foreground">{WIND_ENGINES.find((e) => e.id === engine)?.detail}</p>
+        {estimates?.rounded_part?.advice && (
+          <p className="text-xs text-sky-text" data-testid="rounded-advice">
+            {estimates.rounded_part.advice}
+          </p>
+        )}
         {engine === "reference" && estimates?.engines?.reference?.docker_ready === false && (
           <p className="text-xs text-gold-text">Needs Docker (Colima) running. SimLab asks before starting it.</p>
         )}

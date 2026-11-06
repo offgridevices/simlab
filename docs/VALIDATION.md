@@ -128,7 +128,7 @@ What this shows:
 - **Shape matters more than speed.** Below Reynolds number 5,000, OpenFOAM is within 1–2% on every shape tried.
 - **Flat-faced, sharp-edged parts** (plates, cubes, bars, frames, most drone parts): OpenFOAM is within about 1–7% already at Draft. The quick preview reads 12–30% low on a Draft grid and needs Normal to come within about 4%.
 - **Rounded parts above about Reynolds number 30,000** (balls, domes, spinner caps): the quick preview is better. OpenFOAM's steady model cannot follow the swinging wake behind a ball, so it reads 15–26% low there, and a finer mesh does not fix that.
-- OpenFOAM stays the default engine for still parts. The app's "How sure" note says which case a part is in.
+- OpenFOAM stays the default engine for still parts. SimLab looks at the part's outline as the wind sees it and, for a rounded part above Reynolds number 10,000 (by its thickness across the wind), warns on the OpenFOAM result and offers to check it with the quick preview. On the comparison shapes it marks the ball and the round rods across the wind as rounded, and the cube, plates, bars and both propellers (any direction) as sharp-edged.
 
 Notes on the table:
 

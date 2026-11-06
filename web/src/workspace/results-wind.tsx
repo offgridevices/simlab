@@ -1,7 +1,7 @@
 // Wind tunnel results: the forces in plain numbers, the part coloured by
 // air pressure, flow slices you can switch on, and how the force settled.
 import { useMemo, useState } from "react";
-import { GaugeIcon } from "lucide-react";
+import { GaugeIcon, ZapIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Card } from "@/components/ui/card";
@@ -87,6 +87,23 @@ export function WindResults({ run, summary: s, again }: { run: Run; summary: Win
           </span>
         </Alert>
       )}
+      {!preview && s.rounded_part?.advice && (
+        <Alert tone="gold" data-testid="rounded-advice">
+          <span className="flex flex-col gap-2">
+            <span>
+              <span className="font-semibold">Rounded part: this number may be low. </span>
+              {s.rounded_part.advice}
+            </span>
+            {again && (
+              <Button size="sm" variant="outline" className="self-start" onClick={() => again.rerun("native")} disabled={again.starting} data-testid="run-preview">
+                <ZapIcon />
+                {again.starting ? "Starting…" : "Check it with the quick preview"}
+              </Button>
+            )}
+            {again?.startError && <span className="text-xs text-destructive">{again.startError}</span>}
+          </span>
+        </Alert>
+      )}
       {again?.dialog}
       <Card className="gap-1 border-sky/40 bg-sky/10 p-4">
         <div className="flex items-baseline justify-between gap-3">
@@ -165,7 +182,7 @@ export function WindResults({ run, summary: s, again }: { run: Run; summary: Win
       />
       {metric && <MetricChart run={run} name={metric} />}
 
-      {s.warnings.filter((w) => w !== s.preview_note).map((w) => (
+      {s.warnings.filter((w) => w !== s.preview_note && (preview || w !== s.rounded_part?.advice)).map((w) => (
         <Alert key={w} tone="gold">
           {w}
         </Alert>
