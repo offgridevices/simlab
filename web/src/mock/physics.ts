@@ -466,5 +466,5 @@ const STRENGTH_ACCURACY: Accuracy = {
 const PROP_ACCURACY: Accuracy = {
   method: "Blade element momentum theory with low-Reynolds airfoil data",
   checked_against: "University of Illinois measured propeller data",
-  typical_error: "Thrust within about 10% when the blade section is known; torque about 10% low. Use the wind tunnel for the precise number.",
+  typical_error: "Thrust within about 10% on low-pitch props like E-v5 and on measured props with a known blade section, but it reads high on steeper blades: 15–19% on P-v2 and 23–35% on A-v2 and P-v1 in your OpenFOAM study. Torque within about 12% (power read 24% low on one measured prop). Use the wind tunnel for the precise number.",
 };

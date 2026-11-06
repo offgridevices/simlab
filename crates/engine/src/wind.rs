@@ -90,7 +90,7 @@ pub fn accuracy(engine: &str, spin: bool) -> Value {
     match (engine, spin) {
         ("reference", true) => json!({
             "method": "OpenFOAM v2606: snappyHexMesh mesh around the part, steady RANS with the k-ω SST turbulence model, the spin as a moving reference frame (MRF)",
-            "checked_against": "Your 2026 OpenFOAM propeller study: E-v5 at 45,800 rpm 345.8 g vs 346.0 g, P-v2 380.0 g vs 378.4 g, E-v5 at 17,000 rpm 45.7 g vs 45.8 g",
+            "checked_against": "Your 2026 OpenFOAM propeller study: E-v5 at 45,800 rpm 345.8 g vs 346.0 g, P-v2-e011 380.0 g vs 378.4 g, E-v5 at 17,000 rpm 45.7 g vs 45.8 g",
             "typical_error": "Thrust within about 3% and torque within about 7% (that is how much they move between mesh sizes); within 0.6% of your earlier OpenFOAM runs of the same props.",
         }),
         ("reference", false) => reference_still_accuracy(f64::INFINITY),
