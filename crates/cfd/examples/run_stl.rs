@@ -15,7 +15,7 @@
 //!   --axial <d> --radial <d>   still-air margins in rotor diameters (default 2.5, 1)
 //!   --tip <u>         lattice speed of the blade tip (default 0.1)
 //!   --smag <c>        Smagorinsky constant (default 0.1)
-//!   --wind-margins <up,down,side>  wind domain margins in frontal sizes (default 2.5,5,1.5)
+//!   --wind-margins <up,down,side>  wind domain margins in frontal sizes (default 2.5,5,3)
 //!   --no-refine       one uniform D3Q19 grid instead of the refined D3Q27 solver
 //!   --velocity-inlet  fix the inlet velocity instead of its total pressure
 //!   --cells <n>       cells across the part's largest size (overrides the quality's)
@@ -78,7 +78,7 @@ fn main() -> anyhow::Result<()> {
                 opt.max_tip_speed = args[i + 1].parse()?;
                 i += 1;
             }
-            // wind margins in frontal sizes (default 2.5 upstream, 5 downstream, 1.5 each side)
+            // wind margins in frontal sizes (default 2.5 upstream, 5 downstream, 3 each side)
             "--wind-margins" => {
                 let v: Vec<f64> = args[i + 1].split(',').map(|x| x.parse()).collect::<Result<_, _>>()?;
                 opt.wind_margins.upstream = v[0];

@@ -8,14 +8,21 @@
 //!
 //! Domain (defaults, in units of the frontal size D_f = the larger of the
 //! part's two extents across the wind): 2.5 D_f upstream, 5 D_f downstream,
-//! 1.5 D_f on every side (a sphere blocks 4.9 % of the cross-section). The
+//! 3 D_f on every side (a sphere blocks 1.6 % of the cross-section); for a
+//! slender part 3 × twice its thickness across the wind, at least 1.5 D_f
+//! (a 150 × 12 mm arm broadside: 1.5 D_f, blocking 0.6 %). The
 //! inlet holds the free stream's total pressure with the velocity taken from
 //! inside (so the air ahead can slow down as it would in open air, instead of
 //! being forced to the wind speed); the sides and the outlet are open
 //! (far-field pressure, velocity from inside), which lets the displaced air
-//! escape. With these, the sphere's drag at Re = 100 moved by less than
-//! 0.4 % when any margin was doubled, so no blockage correction is applied;
-//! the blockage ratio is reported.
+//! escape. The open sides pull the pressure round the part to the far
+//! field's too early when they are close: with 1.5 D_f, as before November
+//! 2026, drag read 8-11 % low at Draft (square plate at Re 2·10⁴ 0.986 →
+//! 1.073 with 3 D_f, cube 0.703 → 0.778, sphere 0.424 → 0.457; 5 D_f moved
+//! the sphere by −0.7 % and the plate by −5 %, about its slow wake's swing
+//! over 30 passes; a doubled upstream margin moved the plate by +0.2 %).
+//! At Re = 100 the sphere had moved by less than 0.4 %, so no blockage
+//! correction is applied; the blockage ratio is reported.
 //! Still air with spin: 2.5 rotor diameters above and below the rotor,
 //! 1 diameter of margin around the disk, open on every face.
 //! Viscosity sponges plus absorbing layers (density pulled to the far field)
@@ -145,6 +152,8 @@ pub struct Margins {
     /// wind: in frontal sizes; still air: in rotor diameters (upstream = above/below)
     pub upstream: f64,
     pub downstream: f64,
+    /// wind: in sizes of the part's wake (its frontal size, or twice a
+    /// slender part's thickness across the wind), at least 1.5 frontal sizes
     pub side: f64,
 }
 
@@ -203,7 +212,8 @@ impl Default for SolverOptions {
             max_lattice_speed: 0.075,
             max_tip_speed: 0.10,
             max_tau: 1.0,
-            wind_margins: Margins { upstream: 2.5, downstream: 5.0, side: 1.5 },
+            // 3 frontal sizes to the sides: 1.5 read 8-11 % low on bluff parts
+            wind_margins: Margins { upstream: 2.5, downstream: 5.0, side: 3.0 },
             still_margins: Margins { upstream: 2.5, downstream: 2.5, side: 1.0 },
             smagorinsky: 0.10,
             tolerance: 0.005,
@@ -435,6 +445,9 @@ pub fn thin_cost_cap(q: &GridQuality) -> f64 {
         _ => 2.0e13,
     }
 }
+/// A wind tunnel's sides are at least this many frontal sizes from the part.
+const SIDE_MIN_FRONT: f64 = 1.5;
+
 /// Refinement boxes round a slender part reach this many times its
 /// thinner size (instead of its full frontal size).
 const REFINE_THIN: f64 = 2.0;
@@ -617,8 +630,11 @@ fn plan(cfg: &WindConfig, m: &TriMesh, unit_m: f64, opt: &SolverOptions, budget:
     // the wind, at most its frontal size (a sphere or plate: unchanged)
     let d_box = if spin.is_none() { d_front.min(REFINE_THIN * d_thin) } else { d_front };
     let mg = if still { &opt.still_margins } else { &opt.wind_margins };
-    let dom_lo = [lo[0] - mg.upstream * d_front, lo[1] - mg.side * d_front, lo[2] - mg.side * d_front];
-    let dom_hi = [hi[0] + mg.downstream * d_front, hi[1] + mg.side * d_front, hi[2] + mg.side * d_front];
+    // sides of a wind tunnel: `side` wake sizes (d_box: the frontal size, or
+    // twice a slender part's thickness), never under 1.5 frontal sizes
+    let side = if still { mg.side * d_front } else { (mg.side * d_box).max(SIDE_MIN_FRONT * d_front) };
+    let dom_lo = [lo[0] - mg.upstream * d_front, lo[1] - side, lo[2] - side];
+    let dom_hi = [hi[0] + mg.downstream * d_front, hi[1] + side, hi[2] + side];
     let mut dims = [0u32; 3];
     for k in 0..3 {
         dims[k] = ((dom_hi[k] - dom_lo[k]) / dx).ceil() as u32 + 1;
