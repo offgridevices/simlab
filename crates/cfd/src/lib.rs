@@ -9,6 +9,14 @@
 //!   stable at very low viscosity, Bouzidi walls, momentum-exchange forces.
 //!   On spheres at Re 20-1e4 it was within ~5 % of the standard drag curve,
 //!   and much closer than the uniform grid at Re 1e4 for the same cost.
+//!   November 2026, 20 mm parts (sides 3 frontal sizes out, averaging after
+//!   35 % of the run): sphere Draft Re 1e4 / 2e4 / 1e5 0.433 / 0.453 /
+//!   0.456 (Clift 0.405 / 0.441 / 0.47), Normal Re 2e4 / 1e5 0.404 /
+//!   0.416 (the correlations span 0.39-0.45 / 0.43-0.50; OpenFOAM reads
+//!   0.373 / 0.348 at its Normal / Draft); sharp edges need the finer grid: square
+//!   plate Draft 1.01 / Normal 1.14 (1.14-1.17), cube 0.76 / 1.02
+//!   (1.05-1.07); a 150 x 12 x 6 mm bar broadside 1.27-1.29 at 16-24 cells
+//!   across its 12 mm, about 20 % under OpenFOAM and the published range.
 //! * Spinning parts, and still parts on coarse custom grids: one uniform
 //!   D3Q19 grid (`lattice`, `shader`) with regularized collision and
 //!   Smagorinsky LES, re-voxelizing a spinning part every step. Spinning

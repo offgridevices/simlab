@@ -26,7 +26,7 @@ pub const G: f64 = 9.80665;
 
 /// The one-line accuracy notes. They lead the headline of every quick
 /// preview, so nobody reads a preview's number as the answer.
-pub const PREVIEW_NOTE_STILL: &str = "Quick preview: on test shapes, drag came within about 5% on rounded parts (a sphere, Re 20 to 20,000) and read about 10–15% low on sharp-edged plates. Lift, side force and anything that depends on thin boundary layers (airfoils, wings, small fins) are less certain, and can be off by 20% or more. Use the OpenFOAM test for numbers you will rely on.";
+pub const PREVIEW_NOTE_STILL: &str = "Quick preview: drag on rounded parts came within about 7% (a sphere from Re 20 to 100,000), but sharp-edged parts read low on a preview's coarse grid: about 12% on a flat plate, 20–30% on a cube or a thin bar. Lift, side force and anything that depends on thin boundary layers (airfoils, wings, small fins) are less certain, and can be off by 20% or more. Use the OpenFOAM test for numbers you will rely on.";
 pub const PREVIEW_NOTE_SPIN: &str = "Rough picture only: thrust can be 30–90% off (quick previews of a 3-inch prop read 32–50 g where OpenFOAM gets 345 g); use Accurate for numbers.";
 
 /// What the run settles on before it starts: where the part spins about.
@@ -101,7 +101,7 @@ pub fn accuracy(engine: &str, spin: bool) -> Value {
         }),
         (_, false) => json!({
             "method": "SimLab's GPU wind tunnel: lattice Boltzmann (D3Q27 cumulant collision, nested grid refinement round the part) with interpolated walls, forces averaged over time",
-            "checked_against": "Sphere drag from Reynolds number 20 to 10,000; a thin disk square to the wind at Re 10,000",
+            "checked_against": "Sphere drag from Reynolds number 20 to 100,000 (Draft at Re 10,000 / 20,000 / 100,000: +7 / +3 / −3% on Clift's curve; Normal at 20,000 / 100,000: −8 / −11%; the correlations themselves span 0.39–0.45 at 20,000); at Re 20,000 a square plate (Draft −12%, Normal −2%), a cube (Draft −28%, Normal −4%), a short cylinder across the wind (+8 to +12% on 0.74), a 150 × 12 × 6 mm bar (about 20% under OpenFOAM's Normal) and the E-v5 propeller held still (within 0.2% of OpenFOAM face-on, +8% edge-on)",
             "typical_error": PREVIEW_NOTE_STILL,
         }),
     }
@@ -128,8 +128,8 @@ pub fn reference_still_accuracy(re: f64) -> Value {
     } else {
         json!({
             "method": "OpenFOAM v2606: snappyHexMesh mesh with boundary-layer cells, steady RANS with k-ω SST and the Langtry–Menter transition model (the boundary layer stays laminar until it separates, as on a small part in calm air)",
-            "checked_against": "Sphere at Reynolds number 10,000 (+0.7% Draft, −8% Normal), 20,000 (−9% Draft, −15% Normal) and 100,000 (−26% Draft); square plate across the wind at 20,000 (+6%); circular cylinder at 20,000 (+1 to +3%)",
-            "typical_error": "Rounded, ball-like parts read low at this speed (about 8% near Re 10,000, 10–15% at 20,000, 25% or more near 100,000); sharp-edged and cylindrical parts (plates, arms) come within about 6% up to Re 20,000. A finer mesh does not close the gap for rounded parts: the real boundary layer there separates and its wake swings in a way a steady model cannot follow. SimLab's quick preview has come closer on a sphere at Re 20,000 (within 1%), so check rounded parts there too.",
+            "checked_against": "Sphere at Reynolds number 10,000 (+0.7% Draft, −8% Normal), 20,000 (−9% Draft, −15% Normal) and 100,000 (−26% Draft); at 20,000 a square plate across the wind (+6% Draft, +5% Normal), a cube (+1% Draft, −1% Normal), a 150 × 12 × 6 mm bar (inside the published range), a quasi-2D circular cylinder (+1 to +3%) and a short one with free ends (L/D 5: −12 to −18% on 0.74)",
+            "typical_error": "Rounded, ball-like parts read low at this speed (about 8% near Re 10,000, 10–15% at 20,000, 25% or more near 100,000); flat-faced, sharp-edged parts (plates, cubes, bars) come within about 8% up to Re 20,000, and short round rods read low like balls. A finer mesh does not close the gap for rounded parts: the real boundary layer there separates and its wake swings in a way a steady model cannot follow. SimLab's GPU tunnel comes closer on rounded parts (a sphere at Re 100,000 within 3% at Draft), so check them there too.",
         })
     }
 }

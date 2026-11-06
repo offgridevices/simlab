@@ -81,6 +81,25 @@
 //! | square plate Re 2·10⁴, Draft | 1.17 | 1.240 (+6 %) | 1.240 (+6 %) | LES 0.80 (−31 %) |
 //! | cylinder Re 2·10⁴, Draft | 1.15–1.2 | 1.14 ±3 % | 1.21 ±2.5 % | unsteady RANS (transition): 1.25, St 0.220 |
 //!
+//! **More shapes** (November 2026, through the engine, 6–8 cores per run
+//! with two runs side by side; transition model, steady): square plate
+//! 20 × 20 × 1 mm, Normal 1.231 (+5 to +8 % on 1.14–1.17, Fail et al. 1957
+//! and Bearman 1971), 66 min; cube face-on, Draft 1.058, Normal 1.037 (ref
+//! 1.05–1.07, Hoerner / White), 20 / 107 min; finite circular cylinder
+//! L/D 5 in crossflow, both ends free, Re_D 2·10⁴, Draft 0.610–0.615,
+//! Normal 0.644–0.655 (ref 0.74 for L/D 5, White's table after
+//! Wieselsberger, not re-checked at the source); a 150 × 12 × 6 mm bar
+//! broadside at 15 m/s, wind on the 12 mm face (Re 1.2·10⁴), Draft 1.348
+//! before the slender-part rule (6 cells across 12 mm), 1.380 after (13
+//! cells), Normal 1.569 (26 cells, not settled), against roughly 1.5–2.0
+//! (2-D rectangular cylinder of depth/height 0.5, 2.2–2.4, times a
+//! finite-length factor 0.7–0.8); wind on the 6 mm face (Re 6000): 1.312 /
+//! 1.294 (Draft before / after), Normal 1.241 (ref about 1.15–1.45); the
+//! E-v5 propeller held still, wind along its axis, Draft 1.225 (the GPU
+//! tunnel 1.228), Normal 1.363 (not settled), edge-on Draft 0.743 (GPU
+//! 0.800). The slender bars and short cylinders often do not settle to
+//! ±0.2 % in a steady run; their Cd is the mean of the last iterations.
+//!
 //! Before this, Draft had no prism layers above Re 300: SST read 0.305 at
 //! Re 2·10⁴. Also measured at sphere Re 2·10⁴ and rejected: unsteady RANS (SST or
 //! transition) settles to the steady answer (0.378 / 0.398, no shedding);

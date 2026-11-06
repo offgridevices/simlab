@@ -74,7 +74,7 @@ export function WindResults({ run, summary: s, again }: { run: Run; summary: Win
           <span className="flex flex-col gap-2">
             <span>
               <span className="font-semibold">Quick preview, not the answer. </span>
-              {s.preview_note ?? (spin ? "Rough picture only: thrust can be 30–90% off (quick previews of a 3-inch prop read 32–50 g where OpenFOAM gets 345 g); use Accurate for numbers." : "Quick preview: on test shapes, drag came within about 5% on rounded parts (a sphere, Re 20 to 20,000) and read about 10–15% low on sharp-edged plates. Lift, side force and anything that depends on thin boundary layers (airfoils, wings, small fins) are less certain, and can be off by 20% or more. Use the OpenFOAM test for numbers you will rely on.")}
+              {s.preview_note ?? (spin ? "Rough picture only: thrust can be 30–90% off (quick previews of a 3-inch prop read 32–50 g where OpenFOAM gets 345 g); use Accurate for numbers." : "Quick preview: drag on rounded parts came within about 7% (a sphere from Re 20 to 100,000), but sharp-edged parts read low on a preview's coarse grid: about 12% on a flat plate, 20–30% on a cube or a thin bar. Lift, side force and anything that depends on thin boundary layers (airfoils, wings, small fins) are less certain, and can be off by 20% or more. Use the OpenFOAM test for numbers you will rely on.")}
             </span>
             {again && (
               <Button size="sm" variant="outline" className="self-start" onClick={() => again.rerun("reference")} disabled={again.starting} data-testid="run-accurate">
