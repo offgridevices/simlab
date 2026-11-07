@@ -6,7 +6,8 @@ import { createContext, useContext, useEffect, useRef } from "react";
 import type { ColorScale } from "../lib/colormaps";
 import type { RegionShape, Slice, Vec3 } from "../lib/types";
 import type { Tone } from "../lib/format";
-import type { ToneArrow, ToneMark, ViewerHandle } from "../viewer/viewer";
+import type { LiveProps, ToneArrow, ToneMark, ViewerHandle } from "../viewer/viewer";
+import type { Quat } from "../viewer/scene";
 
 export interface SceneState {
   /** whose surface: the project's model, or a finished run's result surface */
@@ -25,6 +26,10 @@ export interface SceneState {
   deform: { disp: Float32Array; k: number } | null;
   arrows: ToneArrow[];
   plate: { up: Vec3 } | null;
+  /** the part turned to sit on the printer's bed (null: as drawn) */
+  pose: Quat | null;
+  /** a test shown as it runs */
+  live: LiveProps | null;
   spin: { center: Vec3; axis: Vec3; radius: number } | null;
   slices: { key: string; slice: Slice; rgba: Uint8Array }[];
   critical: Vec3 | null;
@@ -42,6 +47,8 @@ export const DEFAULT_SCENE: SceneState = {
   deform: null,
   arrows: [],
   plate: null,
+  pose: null,
+  live: null,
   spin: null,
   slices: [],
   critical: null,

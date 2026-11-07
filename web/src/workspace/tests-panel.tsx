@@ -308,7 +308,7 @@ function RunView({ runId, study, model, nav }: { runId: string; study: Study; mo
   useScene(run?.status === "done" && run.summary?.kind !== "prop" ? {} : { source: { kind: "model", modelId: study.model_id } });
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!run) return <p className="text-sm text-muted-foreground">Loading the run…</p>;
-  if (run.status === "queued" || run.status === "running") return <RunningView run={run} />;
+  if (run.status === "queued" || run.status === "running") return <RunningView run={run} model={model} />;
   if (run.status === "failed" || run.status === "stopped")
     return (
       <div className="flex flex-col gap-3">

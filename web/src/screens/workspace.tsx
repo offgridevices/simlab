@@ -25,6 +25,11 @@ import type { Model } from "../lib/types";
 export type View = "model" | "tests" | "compare";
 /** where the phone's panel sheet rests: a peek over the 3D view, or nearly full height */
 const SNAPS = [0.45, 0.94];
+/** the sheet's own height, a share of the window. Vaul moves the sheet down by (1 − snap) of the
+ * window from where it sits, so (snap − (1 − SHEET)) of the window shows; the panel must fit in that */
+const SHEET = 0.94;
+/** the grab handle above the panel: 1rem gap + 0.375rem bar */
+const HANDLE = "1.375rem";
 
 function useMediaQuery(q: string): boolean {
   const [on, setOn] = useState(() => typeof matchMedia !== "undefined" && matchMedia(q).matches);
@@ -264,6 +269,8 @@ function Loaded({
                   deform={scene.deform}
                   arrows={scene.arrows}
                   plate={scene.plate}
+                  pose={scene.pose}
+                  live={scene.live}
                   spin={scene.spin}
                   slices={scene.slices}
                   critical={scene.critical}
@@ -278,7 +285,7 @@ function Loaded({
                   <DrawerContent overlay={false} className="h-[94dvh] border-x data-[vaul-drawer-direction=bottom]:max-h-none data-[vaul-drawer-direction=bottom]:mt-0" data-testid="panel-sheet">
                     <DrawerTitle className="sr-only">{nav.view === "model" ? "Model" : "Tests"}</DrawerTitle>
                     <DrawerDescription className="sr-only">Drag up to read more, down to see the part</DrawerDescription>
-                    <div className="flex min-h-0 flex-1 flex-col" style={{ maxHeight: `calc(${(typeof snap === "number" ? snap : 0.45) * 100}dvh - 1.75rem)` }}>
+                    <div className="flex min-h-0 flex-1 flex-col" style={{ maxHeight: `calc(${((typeof snap === "number" ? snap : SNAPS[0]!) - (1 - SHEET)) * 100}dvh - ${HANDLE})` }}>
                       {panel}
                     </div>
                   </DrawerContent>
