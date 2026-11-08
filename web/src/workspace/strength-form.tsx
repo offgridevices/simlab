@@ -2,7 +2,7 @@
 // what pushes on it, and how detailed. Faces are picked by clicking them in
 // the 3D view while their step is open.
 import { useMemo, useState } from "react";
-import { MousePointerClickIcon, PlaneTakeoffIcon, PlusIcon, Trash2Icon } from "lucide-react";
+import { ChevronRightIcon, MousePointerClickIcon, PlaneTakeoffIcon, PlusIcon, Trash2Icon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -23,6 +23,9 @@ import { Accordion } from "@/components/ui/accordion";
 import { DEFAULT_MOTOR, modelCentre, motorLoad, motorTorque } from "./presets";
 import type { StepsProps } from "./study-form";
 import type { ToneArrow, ToneMark } from "../viewer/viewer";
+import { PoseControls, usePose } from "./print-pose";
+import { RpmHelper } from "./rpm-helper";
+import { hubFaces } from "./presets";
 
 export function strengthProblems(c: StrengthConfig): string[] {
   const out: string[] = [];
@@ -46,6 +49,7 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
   const [brush, setBrush] = useState(() => roundBrush(model.size_mm ? Math.max(...model.size_mm) * 0.08 : 6));
   const [activeArea, setActiveArea] = useState<number | null>(null);
   const regions = c.regions ?? [];
+  const [pose, setPose] = usePose(c.print_up);
   const pg = model.suggestions?.prop;
   const hub = pg ? { center: pg.center_mm, axis: pg.axis, radius: pg.hub_radius_mm ?? pg.radius_mm * 0.11 } : null;
   const mat = materials?.find((m) => m.id === c.material_id);
@@ -54,7 +58,12 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
 
   const target: Target = step === 2 && bedPick ? { kind: "bed" } : step === 3 && c.support.type === "fixed" ? { kind: "support" } : step === 4 && editing !== null && c.loads[editing] && "patches" in c.loads[editing]! ? { kind: "load", i: editing } : null;
 
-  const setLoad = (i: number, l: Load) => set({ ...c, loads: c.loads.map((x, j) => (j === i ? l : x)) });
+  /** change one load; a new speed on a spinning propeller goes to its air load too (and back), so the two always match */
+  const setLoad = (i: number, l: Load) => {
+    const old = c.loads[i];
+    const rpm = (l.type === "spin" || l.type === "prop_aero") && old && "rpm" in old && old.rpm !== l.rpm ? l.rpm : null;
+    set({ ...c, loads: c.loads.map((x, j) => (j === i ? l : rpm !== null && (x.type === "spin" || x.type === "prop_aero") ? { ...x, rpm } : x)) });
+  };
   /** new ids for the support or a load, with the config's regions; areas nothing uses any more are dropped */
   const setArea = (where: "support" | number, ids: number[], next: Region[]) => {
     const support: Support = where === "support" ? { type: "fixed", patches: ids } : c.support;
@@ -100,9 +109,10 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
     onPick: target && !brushing ? pick : undefined,
     onPoint: brushing ? brushAt : undefined,
     regions: sceneRegions,
-    arrows,
+    arrows: step === 2 ? [] : arrows,
     plate: step === 2 ? { up: c.print_up } : null,
-    spin: spin ? { center: spin.center_mm, axis: spin.axis, radius: model.suggestions?.prop?.radius_mm ?? R * 0.9 } : null,
+    pose: step === 2 ? pose : null,
+    spin: spin && step !== 2 ? { center: spin.center_mm, axis: spin.axis, radius: model.suggestions?.prop?.radius_mm ?? R * 0.9 } : null,
     hint:
       brushing
         ? "Click the part to cover the area around that point"
@@ -110,6 +120,8 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
         ? "Click the face that sits on the printer's bed"
         : target?.kind === "support"
           ? "Click faces to hold them still · click again to let go"
+          : step === 2
+          ? "Turn the part the way it sits on your printer's bed"
           : target?.kind === "load"
             ? `Click the faces load ${target.i + 1} pushes on`
             : null,
@@ -133,6 +145,31 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
     set({ ...c, loads: [...c.loads, l] });
     setEditing(c.loads.length);
   };
+  /** a propeller held where it bolts on: the shaft hole's faces if found, else a round area on the axis */
+  const holdHub = () => {
+    if (!pg || !hub) return;
+    const faces = hubFaces(model, pg.center_mm, pg.axis, pg.radius_mm);
+    if (faces.length) {
+      set({ ...c, support: { type: "fixed", patches: faces } });
+      return;
+    }
+    const id = nextRegionId(regions);
+    setArea("support", [id], [...regions, { id, label: "Hub", shape: { type: "cylinder", axis: hub.axis, center_mm: hub.center, radius_mm: hub.radius } }]);
+  };
+  /** a propeller on a motor: spinning, and the air pushing on its blades, at one speed */
+  const spinOnMotor = (rpm: number) => {
+    const center = pg?.center_mm ?? modelCentre(model);
+    const axis = pg?.axis ?? [0, 0, 1];
+    set({
+      ...c,
+      loads: [
+        ...c.loads.filter((l) => l.type !== "spin" && l.type !== "prop_aero"),
+        { type: "spin", rpm, axis, center_mm: center, label: "Spin" },
+        { type: "prop_aero", rpm, airspeed_m_s: 0, axis, center_mm: center, label: "Air load" },
+      ],
+    });
+    setEditing(null);
+  };
   const motorsOnMounts = () => {
     const m = motors?.find((x) => x.id === DEFAULT_MOTOR.id) ?? DEFAULT_MOTOR;
     set({ ...c, loads: [...c.loads.filter((l) => l.type !== "motor"), ...mounts.map((g, i) => motorLoad(m, g.patches, g.axis, `Motor ${i + 1}`))] });
@@ -153,13 +190,20 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
         <p className="text-sm text-soft">
           {fdm || !mat
             ? "Printed parts are weakest between their layers. Tell SimLab how it sat on the bed, so it knows which way the layers run."
-            : "Resin parts are about as strong in every direction, so this matters less. It still sets how the part is shown."}
+            : "Resin parts are about as strong in every direction, so this matters less. Resin prints are often tipped on supports: turn it the way you print it."}
         </p>
+        <PoseControls
+          pose={pose}
+          onPose={(q, up) => {
+            setPose(q);
+            set({ ...c, print_up: up });
+          }}
+        />
         <Button variant={bedPick ? "default" : "outline"} size="sm" className="self-start" onClick={() => setBedPick((b) => !b)} aria-pressed={bedPick} data-testid="pick-bed">
           <MousePointerClickIcon />
-          {bedPick ? "Now click the face on the bed…" : "Click the face that sits on the bed"}
+          {bedPick ? "Now click the face on the bed…" : "Lay a face flat: click it"}
         </Button>
-        <span className="text-xs text-muted-foreground">Or pick which way is up:</span>
+        <span className="text-xs text-muted-foreground">Or say which of the part's own directions points up:</span>
         <AxisPicker label="Up on the printer" value={c.print_up} onChange={(v) => set({ ...c, print_up: v })} />
       </Step>
 
@@ -194,6 +238,22 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
             </Label>
           ))}
         </RadioGroup>
+        {pg && hub && c.support.type === "fixed" && !c.support.patches.length && (
+          <div className="flex flex-col gap-2 rounded-lg border border-plum/40 bg-plum/[0.06] p-3" data-testid="hold-prop">
+            <span className="text-sm font-medium">It's a propeller: hold it where it bolts onto the motor</span>
+            <span className="text-xs text-muted-foreground">One click holds the hub, inside and out, so you don't have to click the faces of the hole.</span>
+            <Button size="sm" className="self-start" onClick={holdHub} data-testid="hold-prop-hub">
+              Hold the hub
+            </Button>
+          </div>
+        )}
+        {model.format === "stl" && c.support.type === "fixed" && (
+          <p className="rounded-lg bg-sunken px-3 py-2.5 text-xs text-soft" data-testid="stl-tip">
+            <span>
+              <span className="font-medium">STL files have no real faces,</span> only triangles, so SimLab guesses the faces from the shape and small or curved spots (like the inside of a hole) may not click. Use the brush or {pg ? "Hold the hub" : "bigger faces"}, or bring in the STEP file: STEP keeps the real faces.
+            </span>
+          </p>
+        )}
         {c.support.type === "fixed" && (
           <AreaPicker
             ids={c.support.patches}
@@ -224,6 +284,13 @@ export function StrengthSteps({ config: c, set, model, prepared, step, setStep, 
             <PlaneTakeoffIcon />
             Put a motor on each of the {mounts.length} mounts found
           </Button>
+        )}
+        {pg && !c.loads.some((l) => l.type === "spin" || l.type === "prop_aero") && (
+          <div className="flex flex-col gap-2 rounded-lg border border-plum/40 bg-plum/[0.06] p-3" data-testid="prop-quick">
+            <span className="text-sm font-medium">A propeller on a motor</span>
+            <span className="text-xs text-muted-foreground">Two loads in one go: the pull from spinning fast, and the air pushing on the blades. You only need how fast it spins.</span>
+            <RpmHelper onUse={spinOnMotor} cta="Add these loads" />
+          </div>
         )}
         <ul className="flex flex-col gap-2">
           {c.loads.map((l, i) => (
@@ -389,32 +456,47 @@ function LoadCard({
           )}
           {(l.type === "spin" || l.type === "prop_aero") && (
             <>
-              <Field label="Speed">
+              <p className="text-xs text-soft">
+                {l.type === "spin"
+                  ? "Spinning fast pulls every bit of the blade outward, hardest at the tips. This is the load that snaps propellers."
+                  : "The air the blades push down pushes back up on them, bending the blades forward."}
+              </p>
+              <Field label="How fast it spins">
                 <NumberField label="Speed" value={l.rpm} unit="rpm" min={0} step={500} onChange={(v) => onChange({ ...l, rpm: v })} testId="load-rpm" />
               </Field>
+              <RpmHelper onUse={(rpm) => onChange({ ...l, rpm })} />
               {l.type === "prop_aero" && (
                 <Field label="Flying forward at">
                   <NumberField label="Forward speed" value={l.airspeed_m_s ?? 0} unit="m/s" min={0} onChange={(v) => onChange({ ...l, airspeed_m_s: v })} />
+                  <span className="text-xs text-muted-foreground">0 is hovering, the hardest case for the blades. 20 m/s is fast forward flight.</span>
                 </Field>
               )}
-              <Field label="Spins about">
-                <AxisPicker label="Spin axis" value={l.axis} onChange={(v) => onChange({ ...l, axis: v })} />
-              </Field>
-              <Field label="Centre (mm)">
-                <div className="flex flex-wrap items-center gap-2">
-                  {(["x", "y", "z"] as const).map((k, j) => (
-                    <span key={k} className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                      {k.toUpperCase()}
-                      <NumberField label={`Centre ${k}`} width="w-16" value={l.center_mm[j]!} onChange={(v) => onChange({ ...l, center_mm: l.center_mm.map((c, q) => (q === j ? v : c)) as Vec3 })} />
-                    </span>
-                  ))}
-                  {propCentre && (
-                    <Button size="xs" variant="ghost" onClick={() => onChange({ ...l, center_mm: propCentre })}>
-                      Use the hub
-                    </Button>
-                  )}
-                </div>
-              </Field>
+              <Collapsible>
+                <CollapsibleTrigger className="group inline-flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:underline" data-testid="spin-advanced">
+                  <ChevronRightIcon className="size-3 transition-transform group-data-[state=open]:rotate-90" />
+                  Where and which way it spins {propCentre ? "(found from the shape)" : ""}
+                </CollapsibleTrigger>
+                <CollapsibleContent className="flex flex-col gap-3 pt-2">
+                  <Field label="Spins about">
+                    <AxisPicker label="Spin axis" value={l.axis} onChange={(v) => onChange({ ...l, axis: v })} />
+                  </Field>
+                  <Field label="Centre of the hub (mm)">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {(["x", "y", "z"] as const).map((k, j) => (
+                        <span key={k} className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                          {k.toUpperCase()}
+                          <NumberField label={`Centre ${k}`} width="w-16" value={l.center_mm[j]!} onChange={(v) => onChange({ ...l, center_mm: l.center_mm.map((c, q) => (q === j ? v : c)) as Vec3 })} />
+                        </span>
+                      ))}
+                      {propCentre && (
+                        <Button size="xs" variant="ghost" onClick={() => onChange({ ...l, center_mm: propCentre })}>
+                          Use the hub
+                        </Button>
+                      )}
+                    </div>
+                  </Field>
+                </CollapsibleContent>
+              </Collapsible>
             </>
           )}
           {needsFaces && (
@@ -536,7 +618,7 @@ export function faceNormal(id: number, patches: Patch[], prepared: StepsProps<St
   return Math.hypot(...s) > 0 ? unit(s) : null;
 }
 
-function loadArrows(loads: Load[], patches: Patch[], regions: Region[], model: import("../lib/types").Model, R: number): ToneArrow[] {
+export function loadArrows(loads: Load[], patches: Patch[], regions: Region[], model: import("../lib/types").Model, R: number): ToneArrow[] {
   const out: ToneArrow[] = [];
   for (const l of loads) {
     if (l.type === "motor" || l.type === "force" || l.type === "pressure") {

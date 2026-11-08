@@ -6,7 +6,7 @@
 // arrives as props; the scene itself (scene.ts) is imperative.
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
 import { Vector3, type Camera } from "three";
-import { BoxIcon, MaximizeIcon, MinusIcon, PinIcon, PlusIcon, XIcon } from "lucide-react";
+import { BoxIcon, HouseIcon, MaximizeIcon, MinusIcon, PinIcon, PlusIcon, XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Loader } from "@/components/ui/skeleton";
@@ -17,7 +17,7 @@ import type { RegionShape, Slice, Vec3 } from "../lib/types";
 import { regionMask } from "../lib/regions";
 import { n, type Tone } from "../lib/format";
 import type { Prepared } from "./prepare";
-import { SceneView, type ProbeHit, type ViewPreset } from "./scene";
+import { SceneView, type ProbeHit, type Quat, type ViewPreset } from "./scene";
 
 export interface ToneMark {
   ids: number[];
@@ -51,7 +51,12 @@ export interface ViewerProps {
   probe?: { label: string; unit: string } | null;
   deform?: { disp: Float32Array; k: number } | null;
   arrows?: ToneArrow[];
+  /** the printer's bed under the part */
   plate?: { up: Vec3 } | null;
+  /** how the part is turned to sit on the bed (null: as drawn) */
+  pose?: Quat | null;
+  /** a test shown as it runs */
+  live?: LiveProps | null;
   spin?: { center: Vec3; axis: Vec3; radius: number } | null;
   slices?: { key: string; slice: Slice; rgba: Uint8Array }[];
   critical?: Vec3 | null;
@@ -63,6 +68,12 @@ export interface ViewerProps {
   children?: ReactNode;
   className?: string;
   label?: string;
+}
+
+export interface LiveProps {
+  spin?: { center: Vec3; axis: Vec3 } | null;
+  flow?: { kind: "around" | "through"; dir: Vec3; center: Vec3; radius: number } | null;
+  pulse?: boolean;
 }
 
 export interface ViewerHandle {
@@ -183,6 +194,13 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(p, r
     });
   }, [p.arrows, p.plate, p.spin, p.prepared, theme]);
   useEffect(() => view.current?.setSlices(p.slices ?? []), [p.slices]);
+  const poseKey = JSON.stringify(p.pose ?? null);
+  useEffect(() => view.current?.setPose(p.pose ?? null), [poseKey, p.prepared]);
+  const liveKey = JSON.stringify(p.live ?? null);
+  useEffect(() => {
+    const l = p.live;
+    view.current?.setLive(l ? { spin: l.spin, pulse: l.pulse, flow: l.flow ? { ...l.flow, color: toneVar("sky") } : null } : null);
+  }, [liveKey, p.prepared, theme]);
   // markers moved: draw a frame so they land in place
   useEffect(() => view.current?.request(), [p.critical, pins]);
 
@@ -325,15 +343,33 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(function Viewer(p, r
               <PlusIcon />
             </Button>
           </div>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            style={{ visibility: status === "ready" ? "visible" : "hidden" }}
+            className="absolute bottom-2 left-[5.75rem] rounded-full border bg-card/95 shadow-float backdrop-blur"
+            onClick={() => view.current?.reset()}
+            aria-label="Home view: the whole part, from the front corner"
+            title="Home view (or double-click the axes)"
+            data-testid="home-view"
+          >
+            <HouseIcon />
+          </Button>
           <svg
             ref={gizmo}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              view.current?.reset();
+            }}
             style={{ visibility: status === "ready" ? "visible" : "hidden" }}
             width="88"
             height="88"
             viewBox="-44 -44 88 88"
-            className="absolute bottom-2 left-2 overflow-visible"
+            className="absolute bottom-2 left-2 select-none overflow-visible"
+            // a double-click must not select words elsewhere on the page
+            onMouseDown={(e) => e.detail > 1 && e.preventDefault()}
             role="group"
-            aria-label="Axes: click one to look along it"
+            aria-label="The printer's axes: click one to look along it, double-click for the home view"
           >
             {(["x", "y", "z"] as const).map((a) => (
               <g key={a} data-axis={a}>

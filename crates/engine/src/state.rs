@@ -22,7 +22,6 @@ pub struct App {
     pub quick_queue: mpsc::UnboundedSender<String>,
     pub stops: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub checks: Mutex<Vec<crate::system::Check>>,
-    pub started: std::time::Instant,
     pub last_activity: Mutex<std::time::Instant>,
     /// SimLab started Colima (so it stops it again when it quits)
     pub started_colima: AtomicBool,
@@ -86,7 +85,6 @@ impl App {
             quick_queue: quick,
             stops: Mutex::new(HashMap::new()),
             checks: Mutex::new(vec![]),
-            started: std::time::Instant::now(),
             last_activity: Mutex::new(std::time::Instant::now()),
             started_colima: AtomicBool::new(false),
         }))

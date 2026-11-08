@@ -44,7 +44,21 @@ export interface SpinShow {
   radius: number;
   color: string;
 }
+/** a quaternion [x, y, z, w]: how the part is turned to sit on the printer's bed */
+export type Quat = [number, number, number, number];
+/** a test shown as it runs: the part spinning, air streaming past or through it, loads pulsing */
+export interface LiveShow {
+  /** the part turns about this axis (shown slowly; the real speed would only flicker) */
+  spin?: { center: Vec3; axis: Vec3 } | null;
+  /** air: "around" a part in a stream, or "through" a propeller's disc (dir = the way the air moves) */
+  flow?: { kind: "around" | "through"; dir: Vec3; center: Vec3; radius: number; color: string } | null;
+  /** the load arrows breathe, so it reads as pushing */
+  pulse?: boolean;
+}
 
+/** where the stream runs along its way, in part radii from the middle: from, to */
+const FLOW_SPAN = { through: [-1.1, 1.7], around: [-1.6, 2] } as const;
+const coarsePointer = () => typeof matchMedia !== "undefined" && matchMedia("(pointer: coarse)").matches;
 const reduceMotion = () => typeof matchMedia !== "undefined" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /** a CSS colour (from the tokens) as a three.js colour; mid grey if it cannot be read */
@@ -110,8 +124,24 @@ export class SceneView {
   private pickMat: THREE.ShaderMaterial;
   private pickTarget = new THREE.WebGLRenderTarget(1, 1);
   private pickBuf = new Uint8Array(4);
+  /** drawn in the part's own frame (load arrows, spin ring), turned with it */
   private overlays = new THREE.Group();
   private slices = new THREE.Group();
+  /** drawn in the printer's frame: the bed (its own group, so redrawing it never touches the air streaks) */
+  private world = new THREE.Group();
+  private bedGroup = new THREE.Group();
+  /** the part's turn onto the bed (identity: as drawn), and the spin on top of it while a test runs */
+  private pose = new THREE.Matrix4();
+  private partM = new THREE.Matrix4();
+  private partInv = new THREE.Matrix4();
+  private live: LiveShow | null = null;
+  private liveT0 = 0;
+  private flowLines: THREE.LineSegments | null = null;
+  private flowP: Float32Array | null = null;
+  private flowAge: Float32Array | null = null;
+  private lastLive = 0;
+  /** the part's middle in its own frame (the bounding sphere's centre) */
+  private modelCenter = new THREE.Vector3();
   private sliceCache = new Map<string, THREE.Mesh>();
   private center = new THREE.Vector3();
   private radius = 50;
@@ -174,7 +204,8 @@ export class SceneView {
       this.tween = null;
     });
 
-    this.scene.add(this.hemi, this.grid, this.overlays, this.slices);
+    this.scene.add(this.hemi, this.grid, this.overlays, this.slices, this.world, this.bedGroup);
+    for (const g of [this.overlays, this.slices]) g.matrixAutoUpdate = false;
     // the lights move with the camera, so the side you look at is always lit
     this.camera.add(this.sun, this.fill);
     this.sun.position.set(0.6, 1, 1.4);
@@ -337,6 +368,7 @@ export class SceneView {
       if (k >= 1) this.tween = null;
     }
     const moving = this.controls.update();
+    const animating = this.stepLive();
     if (this.hoverQueued) {
       const { x, y } = this.hoverQueued;
       this.hoverQueued = null;
@@ -358,7 +390,7 @@ export class SceneView {
     this.stats.renderMs += performance.now() - t;
     this.placeAnchors();
     this.onFrame(this.camera);
-    if (moving || this.tween) this.request();
+    if (moving || this.tween || animating) this.request();
   };
 
   private resize() {
@@ -416,17 +448,68 @@ export class SceneView {
     this.probeScene.add(pm2);
     this.stats.triangles = p.triangles;
     const s = g.boundingSphere!;
-    this.center.copy(s.center);
+    this.modelCenter.copy(s.center);
+    this.center.copy(s.center).applyMatrix4(this.pose);
     this.radius = s.radius || 1;
     this.camera.near = this.radius / 200;
     this.camera.far = this.radius * 200;
     this.camera.updateProjectionMatrix();
     this.controls.minDistance = this.radius * 0.05;
     this.controls.maxDistance = this.radius * 40;
-    g.computeBoundingBox();
-    this.buildGrid(g.boundingBox!);
+    this.applyPart();
+    this.buildGrid(this.posedBox());
     if (!this.touched) this.fit(false);
     this.request();
+  }
+
+  /** the part's box in the printer's frame (as it sits now) */
+  private posedBox(): THREE.Box3 {
+    const box = new THREE.Box3();
+    const p = this.prepared?.positions;
+    if (!p) return box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(10, 10, 10));
+    const v = new THREE.Vector3();
+    const stride = 3 * Math.max(1, Math.floor(p.length / 3 / 200000));
+    for (let i = 0; i < p.length; i += stride) box.expandByPoint(v.set(p[i]!, p[i + 1]!, p[i + 2]!).applyMatrix4(this.pose));
+    return box;
+  }
+
+  /** put the part (and everything drawn in its frame) where the pose and the spin say */
+  private applyPart(spin?: THREE.Matrix4) {
+    this.partM.copy(this.pose);
+    if (spin) this.partM.multiply(spin);
+    this.partInv.copy(this.partM).invert();
+    for (const m of [this.mesh, ...this.pickScene.children, ...this.probeScene.children]) {
+      if (!m) continue;
+      m.matrix.copy(this.partM);
+      m.matrixWorldNeedsUpdate = true;
+    }
+    for (const g of [this.overlays, this.slices]) {
+      g.matrix.copy(this.pose);
+      g.matrixWorldNeedsUpdate = true;
+    }
+  }
+
+  /**
+   * Turn the part onto the printer's bed (null: as drawn). The grid stays flat
+   * under it and the compass keeps naming the printer's directions.
+   */
+  setPose(q: Quat | null) {
+    const next = new THREE.Matrix4();
+    if (q) {
+      const qq = new THREE.Quaternion(q[0], q[1], q[2], q[3]).normalize();
+      // turn about the part's middle, so it stays where it was
+      const c = this.modelCenter;
+      next.makeTranslation(c.x, c.y, c.z).multiply(new THREE.Matrix4().makeRotationFromQuaternion(qq)).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
+    }
+    if (next.equals(this.pose)) return;
+    this.pose.copy(next);
+    this.applyPart();
+    if (!this.prepared) return;
+    this.center.copy(this.modelCenter).applyMatrix4(this.pose);
+    this.buildGrid(this.posedBox());
+    this.drawBed();
+    // keep looking from the same side, at the part where it now sits
+    this.fit(true, this.camera.position.clone().sub(this.controls.target).normalize());
   }
 
   get size() {
@@ -633,33 +716,11 @@ export class SceneView {
         }
         x.renderOrder = 10;
       });
+      h.userData.arrow = { start: start.clone(), dir: dir.clone(), len };
       this.overlays.add(h);
     }
-    if (o.plate && this.prepared) {
-      const up = new THREE.Vector3(...o.plate.up).normalize();
-      // the lowest point along "up": where the bed is
-      const p = this.prepared.positions;
-      let lo = Infinity;
-      for (let i = 0; i < p.length; i += 3 * Math.max(1, Math.floor(p.length / 3 / 200000))) lo = Math.min(lo, p[i]! * up.x + p[i + 1]! * up.y + p[i + 2]! * up.z);
-      const c = this.center.clone();
-      const onBed = c.clone().addScaledVector(up, lo - c.dot(up) - R * 0.01);
-      const size = R * 2.3;
-      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), up);
-      const plate = new THREE.Mesh(
-        new THREE.PlaneGeometry(size, size),
-        new THREE.MeshBasicMaterial({ color: color(o.plate.color), transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }),
-      );
-      plate.position.copy(onBed);
-      plate.quaternion.copy(q);
-      const grid = new THREE.GridHelper(size, 12, color(o.plate.color).getHex(), color(o.plate.color).getHex());
-      (grid.material as THREE.LineBasicMaterial).transparent = true;
-      (grid.material as THREE.LineBasicMaterial).opacity = 0.35;
-      grid.quaternion.copy(q).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2));
-      grid.position.copy(onBed);
-      const arrowStart = onBed.clone().addScaledVector(new THREE.Vector3(1, 0, 0).applyQuaternion(q), size * 0.42).addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(q), -size * 0.42);
-      const arrow = new THREE.ArrowHelper(up, arrowStart, R * 0.6, color(o.plate.color).getHex(), R * 0.14, R * 0.08);
-      this.overlays.add(plate, grid, arrow);
-    }
+    this.bed = o.plate ? { color: o.plate.color } : null;
+    this.drawBed();
     if (o.spin) {
       const axis = new THREE.Vector3(...o.spin.axis).normalize();
       const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), axis);
@@ -674,6 +735,200 @@ export class SceneView {
       this.overlays.add(ring, ax);
     }
     this.request();
+  }
+
+  private bed: { color: string } | null = null;
+  /** the printer's bed: a flat tinted sheet just under the part as it sits now */
+  private drawBed() {
+    for (const c of [...this.bedGroup.children]) {
+      this.bedGroup.remove(c);
+      c.traverse((x) => {
+        const m = x as THREE.Mesh;
+        m.geometry?.dispose();
+        (m.material as THREE.Material | undefined)?.dispose?.();
+      });
+    }
+    if (this.bed && this.prepared) {
+      const box = this.posedBox();
+      const size = box.getSize(new THREE.Vector3());
+      const span = Math.max(size.x, size.y) * 1.4 || 10;
+      const z = box.min.z - Math.max(size.z, span) * 0.003;
+      const col = color(this.bed.color);
+      const sheet = new THREE.Mesh(
+        new THREE.PlaneGeometry(span, span),
+        new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.14, side: THREE.DoubleSide, depthWrite: false }),
+      );
+      sheet.position.set((box.min.x + box.max.x) / 2, (box.min.y + box.max.y) / 2, z);
+      const edge = new THREE.LineSegments(new THREE.EdgesGeometry(sheet.geometry), new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.7 }));
+      edge.position.copy(sheet.position);
+      sheet.renderOrder = edge.renderOrder = -1;
+      this.bedGroup.add(sheet, edge);
+    }
+    this.request();
+  }
+
+  /** show a test as it runs (null: still) */
+  setLive(l: LiveShow | null) {
+    this.live = l && (l.spin || l.flow || l.pulse) ? l : null;
+    this.liveT0 = performance.now();
+    this.lastLive = 0;
+    if (this.flowLines) {
+      this.world.remove(this.flowLines);
+      this.flowLines.geometry.dispose();
+      (this.flowLines.material as THREE.Material).dispose();
+      this.flowLines = null;
+    }
+    const f = this.live?.flow;
+    if (f) {
+      const N = f.kind === "through" ? (coarsePointer() ? 140 : 260) : coarsePointer() ? 220 : 420;
+      this.flowP = new Float32Array(N * 3);
+      this.flowAge = new Float32Array(N);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(N * 6), 3));
+      g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(N * 8), 4));
+      const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false });
+      this.flowLines = new THREE.LineSegments(g, mat);
+      this.flowLines.frustumCulled = false;
+      this.flowLines.renderOrder = 5;
+      this.flowLines.matrixAutoUpdate = false;
+      this.world.add(this.flowLines);
+      for (let i = 0; i < N; i++) this.spawn(i, true);
+    }
+    if (!this.live) {
+      this.applyPart();
+      this.pulseArrows(1);
+    }
+    this.request();
+  }
+
+  /** a stream particle back to the start (anywhere along the way the first time) */
+  private spawn(i: number, anywhere: boolean) {
+    const f = this.live?.flow;
+    const P = this.flowP!;
+    if (!f) return;
+    const R = f.radius;
+    const [x0, x1] = FLOW_SPAN[f.kind];
+    const span = x1 - x0;
+    const u = anywhere ? Math.random() : 0;
+    if (f.kind === "through") {
+      // a stream tube a bit wider than the disc upstream, as far as the disc downstream
+      const r = R * Math.sqrt(Math.random());
+      const a = Math.random() * Math.PI * 2;
+      P[i * 3] = (x0 + u * span) * R;
+      P[i * 3 + 1] = r * Math.cos(a);
+      P[i * 3 + 2] = r * Math.sin(a);
+    } else {
+      P[i * 3] = (x0 + u * span) * R;
+      P[i * 3 + 1] = (Math.random() * 2 - 1) * 1.3 * R;
+      P[i * 3 + 2] = (Math.random() * 2 - 1) * 1.3 * R;
+    }
+    this.flowAge![i] = anywhere ? Math.random() : 0;
+  }
+
+  /** move what moves while a test runs; true while there is something to draw next frame */
+  private stepLive(): boolean {
+    const l = this.live;
+    if (!l) return false;
+    const now = performance.now();
+    const t = (now - this.liveT0) / 1000;
+    // reduced motion: one still picture of the test (streaks in place, part not turning), no frame loop
+    const still = reduceMotion();
+    const slow = still ? 0 : 1;
+    if (l.spin) {
+      const c = new THREE.Vector3(...l.spin.center);
+      const ax = new THREE.Vector3(...l.spin.axis).normalize();
+      const turn = new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(new THREE.Matrix4().makeRotationAxis(ax, t * 2.4 * slow)).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
+      this.applyPart(turn);
+    }
+    if (l.pulse) this.pulseArrows(1 + 0.12 * Math.sin(t * 5 * slow));
+    if (l.flow && this.flowLines) this.stepFlow(l.flow, Math.min(0.05, (now - (this.lastLive || now)) / 1000) * slow);
+    this.lastLive = now;
+    return !still;
+  }
+
+  private pulseArrows(k: number) {
+    for (const c of this.overlays.children) {
+      const a = c.userData.arrow as { start: THREE.Vector3; dir: THREE.Vector3; len: number } | undefined;
+      if (!a) continue;
+      // grow from the tip backwards: the tip stays on the face it pushes
+      c.position.copy(a.start).addScaledVector(a.dir, a.len * (1 - k));
+      c.scale.setScalar(k);
+    }
+  }
+
+  /** move the stream: potential flow round a ball, or a propeller's stream tube (contracting, speeding up, swirling) */
+  private stepFlow(f: NonNullable<LiveShow["flow"]>, dt: number) {
+    const P = this.flowP!, age = this.flowAge!;
+    const N = age.length;
+    const R = f.radius;
+    // the stream's own frame: x along the flow
+    const d = new THREE.Vector3(...f.dir).normalize();
+    const a = Math.abs(d.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);
+    const e1 = new THREE.Vector3().crossVectors(d, a).normalize();
+    const e2 = new THREE.Vector3().crossVectors(d, e1).normalize();
+    const c = new THREE.Vector3(...f.center).applyMatrix4(this.pose);
+    const dW = d.clone().transformDirection(this.pose);
+    const e1W = e1.clone().transformDirection(this.pose);
+    const e2W = e2.clone().transformDirection(this.pose);
+    const pos = this.flowLines!.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const col = this.flowLines!.geometry.getAttribute("color") as THREE.BufferAttribute;
+    const rgb = color(f.color);
+    const U = R * 0.9; // shown speed: about a part's size each second
+    const ball = R * 0.7;
+    for (let i = 0; i < N; i++) {
+      let x = P[i * 3]!, y = P[i * 3 + 1]!, z = P[i * 3 + 2]!;
+      let vx: number, vy: number, vz: number;
+      if (f.kind === "through") {
+        // momentum theory: the air leaves at twice the speed it arrives, the tube narrows to 0.7 of
+        // its width, and it swirls behind the disc. x runs the way the air moves.
+        const w = 0.45 * R;
+        const s0 = Math.tanh(x / w);
+        const speed = U * (1.5 + 0.5 * s0);
+        const r0 = Math.hypot(y, z) / (0.85 - 0.15 * s0);
+        const ang = Math.atan2(z, y) + ((1 + s0) / 2) * 1.6 * dt;
+        x += speed * dt;
+        const s1 = Math.tanh(x / w);
+        const r1 = r0 * (0.85 - 0.15 * s1);
+        const ny = r1 * Math.cos(ang), nz = r1 * Math.sin(ang);
+        vx = speed;
+        vy = (ny - y) / (dt || 1);
+        vz = (nz - z) / (dt || 1);
+        y = ny;
+        z = nz;
+        if (x > FLOW_SPAN.through[1] * R) this.spawn(i, false), (x = P[i * 3]!), (y = P[i * 3 + 1]!), (z = P[i * 3 + 2]!);
+      } else {
+        // uniform stream past a ball: u = U d + (U a³ / 2)(d / r³ − 3 (d·r) r / r⁵)
+        const r2 = x * x + y * y + z * z;
+        const r = Math.sqrt(r2) || 1e-9;
+        const k = (ball ** 3 / 2) / (r2 * r);
+        const dot = x;
+        vx = U * (1 + k * (1 - (3 * dot * x) / r2));
+        vy = U * k * (-(3 * dot * y) / r2);
+        vz = U * k * (-(3 * dot * z) / r2);
+        x += vx * dt;
+        y += vy * dt;
+        z += vz * dt;
+        if (x > FLOW_SPAN.around[1] * R || x * x + y * y + z * z < ball * ball * 0.95) this.spawn(i, false), (x = P[i * 3]!), (y = P[i * 3 + 1]!), (z = P[i * 3 + 2]!);
+      }
+      P[i * 3] = x;
+      P[i * 3 + 1] = y;
+      P[i * 3 + 2] = z;
+      age[i] = Math.min(1, age[i]! + dt * 1.5);
+      // a short streak behind each particle, fading in as it starts
+      const sp = Math.hypot(vx, vy, vz) || 1;
+      const L = R * (f.kind === "through" ? 0.1 : 0.16) * (sp / U);
+      // fade in where the stream starts and out where it ends
+      const [a0, a1] = FLOW_SPAN[f.kind];
+      const at = (x / R - a0) / (a1 - a0);
+      const fade = Math.min(age[i]!, Math.min(1, at / 0.2), Math.min(1, (1 - at) / 0.3));
+      const tx = x - (vx / sp) * L, ty = y - (vy / sp) * L, tz = z - (vz / sp) * L;
+      for (const [j, px, py, pz] of [[0, x, y, z], [1, tx, ty, tz]] as const) {
+        pos.setXYZ(i * 2 + j, c.x + dW.x * px + e1W.x * py + e2W.x * pz, c.y + dW.y * px + e1W.y * py + e2W.y * pz, c.z + dW.z * px + e1W.z * py + e2W.z * pz);
+        col.setXYZW(i * 2 + j, rgb.r, rgb.g, rgb.b, j === 0 ? 0.85 * Math.max(0, fade) : 0);
+      }
+    }
+    pos.needsUpdate = true;
+    col.needsUpdate = true;
   }
 
   setSlices(list: SliceShow[]) {
@@ -716,7 +971,7 @@ export class SceneView {
     for (const el of box.querySelectorAll<HTMLElement>("[data-anchor]")) {
       const [x, y, z] = (el.dataset.anchor ?? "").split(",").map(Number);
       if (![x, y, z].every(Number.isFinite)) continue;
-      v.set(x!, y!, z!).project(this.camera);
+      v.set(x!, y!, z!).applyMatrix4(this.partM).project(this.camera);
       el.style.visibility = v.z > 1 || v.z < -1 ? "hidden" : "visible";
       el.style.transform = `translate(${((v.x + 1) / 2) * r.width}px, ${((1 - v.y) / 2) * r.height}px)`;
     }
@@ -776,7 +1031,7 @@ export class SceneView {
     this.request();
   }
   focus(p: Vec3) {
-    const target = new THREE.Vector3(...p);
+    const target = new THREE.Vector3(...p).applyMatrix4(this.partM);
     const off = this.camera.position.clone().sub(this.controls.target).setLength(this.radius * 1.4);
     this.touched = true;
     const to: [THREE.Vector3, THREE.Vector3] = [target.clone().add(off), target];
@@ -834,7 +1089,8 @@ export class SceneView {
     this.renderer.setRenderTarget(prev);
     this.camera.clearViewOffset();
     if (!pos || value === undefined) return null;
-    return { value, pos: [pos[0]!, pos[1]!, pos[2]!] };
+    const m = new THREE.Vector3(pos[0]!, pos[1]!, pos[2]!).applyMatrix4(this.partInv);
+    return { value, pos: [m.x, m.y, m.z] };
   }
 
   /** the 3D point (mm) on the part under a pixel, or null */
@@ -853,7 +1109,9 @@ export class SceneView {
     this.renderer.setRenderTarget(prev);
     this.camera.clearViewOffset();
     const b = this.probeBuf;
-    return b[3] === 1 ? [b[0]!, b[1]!, b[2]!] : null;
+    if (b[3] !== 1) return null;
+    const m = new THREE.Vector3(b[0]!, b[1]!, b[2]!).applyMatrix4(this.partInv);
+    return [m.x, m.y, m.z];
   }
 
   /** colour the surface covered by areas picked by shape (triangle centre inside the shape) */
@@ -938,6 +1196,9 @@ export class SceneView {
     el.removeEventListener("pointerup", this.pUp);
     el.removeEventListener("pointerleave", this.pLeave);
     this.setOverlays({});
+    this.setLive(null);
+    this.bed = null;
+    this.drawBed();
     this.setSlices([]);
     this.geometry?.dispose();
     this.material.dispose();
